@@ -1,10 +1,11 @@
 """
 DOCX to PDF - через python-docx2pdf
+Поддерживает .docx и .doc
 """
 from pathlib import Path
 import sys
 import shutil
-from docx2pdf import convert
+import subprocess
 from .base import BaseConverter
 from loguru import logger
 
@@ -38,62 +39,99 @@ class DocxToPdfConverter(BaseConverter):
                 '/opt/libreoffice/program/soffice',
             ]
 
-        # Проверяем пути
         for path in paths:
             if Path(path).exists():
                 logger.info(f"LibreOffice найден: {path}")
                 return True
 
-        # Проверяем в PATH
         if shutil.which('soffice') or shutil.which('libreoffice'):
             logger.info("LibreOffice найден в PATH")
             return True
 
-        logger.warning("LibreOffice не найден!")
         return False
 
+    def convert_docx_with_docx2pdf(self, input_path, output_path):
+        """Конвертация DOCX через docx2pdf"""
+        try:
+            from docx2pdf import convert
+            convert(str(input_path), str(output_path))
+            return True
+        except ImportError:
+            return False
+
+    def convert_with_libreoffice(self, input_path, output_path):
+        """Конвертация через LibreOffice напрямую"""
+        soffice_path = None
+
+        # Ищем soffice
+        paths = [
+            '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+            '/usr/bin/soffice',
+            '/usr/bin/libreoffice',
+        ]
+
+        if sys.platform == 'win32':
+            paths = [
+                r'C:\Program Files\LibreOffice\program\soffice.exe',
+                r'C:\Program Files (x86)\LibreOffice\program\soffice.exe',
+            ]
+
+        for path in paths:
+            if Path(path).exists():
+                soffice_path = path
+                break
+
+        if not soffice_path:
+            soffice_path = shutil.which('soffice') or shutil.which('libreoffice')
+
+        if not soffice_path:
+            return False
+
+        # Запускаем конвертацию
+        cmd = [
+            str(soffice_path),
+            '--headless',
+            '--convert-to', 'pdf',
+            '--outdir', str(output_path.parent),
+            str(input_path)
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        # Проверяем результат
+        expected_pdf = output_path.parent / f"{input_path.stem}.pdf"
+        if expected_pdf.exists() and expected_pdf != output_path:
+            expected_pdf.rename(output_path)
+
+        return result.returncode == 0 or output_path.exists()
+
     def get_install_instructions(self):
-        """Возвращает инструкцию по установке LibreOffice"""
+        """Инструкция по установке"""
         if sys.platform == 'darwin':
             return """
-LibreOffice не найден. Для конвертации DOCX в PDF необходимо установить LibreOffice.
+LibreOffice не найден. Для конвертации DOC/DOCX в PDF необходимо установить LibreOffice.
 
-Способы установки:
+Установите через Homebrew:
+  brew install --cask libreoffice
 
-1. Через Homebrew (рекомендуется):
-   brew install --cask libreoffice
-
-2. Скачать с официального сайта:
-   https://www.libreoffice.org/download/
-
-После установки перезапустите приложение.
+Или скачайте с официального сайта:
+  https://www.libreoffice.org/download/
             """
         elif sys.platform == 'win32':
             return """
-LibreOffice не найден. Для конвертации DOCX в PDF необходимо установить LibreOffice.
+LibreOffice не найден. Для конвертации DOC/DOCX в PDF необходимо установить LibreOffice.
 
 Скачайте установщик с официального сайта:
-   https://www.libreoffice.org/download/
-
-После установки перезапустите приложение.
+  https://www.libreoffice.org/download/
             """
         else:
             return """
-LibreOffice не найден. Для конвертации DOCX в PDF необходимо установить LibreOffice.
+LibreOffice не найден. Для конвертации DOC/DOCX в PDF необходимо установить LibreOffice.
 
-Способы установки:
-
-Ubuntu/Debian:
-   sudo apt update
-   sudo apt install libreoffice
-
-CentOS/RHEL:
-   sudo yum install libreoffice
-
-Arch Linux:
-   sudo pacman -S libreoffice-fresh
-
-После установки перезапустите приложение.
+Установите через пакетный менеджер:
+  sudo apt install libreoffice     (Ubuntu/Debian)
+  sudo yum install libreoffice     (CentOS/RHEL)
+  sudo pacman -S libreoffice-fresh (Arch)
             """
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
@@ -101,32 +139,40 @@ Arch Linux:
             self._update_status("Проверка зависимостей...")
             self._update_progress(20)
 
-            # Проверяем наличие LibreOffice
+            # Проверяем LibreOffice
             if not self.check_libreoffice():
-                error_msg = self.get_install_instructions()
-                self._handle_error(error_msg)
+                self._handle_error(self.get_install_instructions())
                 return False
 
-            self._update_status("Конвертация DOCX в PDF...")
+            ext = input_path.suffix.lower()
+            self._update_status(f"Конвертация {ext} в PDF...")
             self._update_progress(50)
 
-            # Конвертируем
-            convert(str(input_path), str(output_path))
+            success = False
 
-            # Проверяем, создался ли файл
-            if output_path.exists() and output_path.stat().st_size > 0:
+            # Пробуем docx2pdf для DOCX
+            if ext == '.docx':
+                try:
+                    from docx2pdf import convert
+                    convert(str(input_path), str(output_path))
+                    success = output_path.exists()
+                except:
+                    success = self.convert_with_libreoffice(input_path, output_path)
+
+            # Для DOC используем LibreOffice напрямую
+            elif ext == '.doc':
+                success = self.convert_with_libreoffice(input_path, output_path)
+
+            if success and output_path.exists() and output_path.stat().st_size > 0:
                 self._update_progress(100)
-                self._update_status("Конвертация завершена!")
+                self._update_status("Готово!")
                 logger.success(f"PDF создан: {output_path}")
                 return True
             else:
-                self._handle_error("PDF файл не был создан")
+                self._handle_error("Не удалось создать PDF")
                 return False
 
         except Exception as e:
-            error_msg = str(e)
-            if "No such file" in error_msg:
-                error_msg = "Не удалось найти LibreOffice. " + self.get_install_instructions()
-            self._handle_error(error_msg)
+            self._handle_error(str(e))
             logger.exception("Ошибка конвертации")
             return False
