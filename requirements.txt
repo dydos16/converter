@@ -8,3 +8,4 @@ pandas==2.1.4
 python-magic==0.4.27
 loguru==0.7.2
 colorama==0.4.6
+lxml==6.0.2

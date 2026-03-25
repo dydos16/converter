@@ -11,7 +11,6 @@ from queue import Queue
 import uuid
 from loguru import logger
 
-from src.converters.base import BaseConverter
 from src.converters.factory import ConverterFactory
 
 
@@ -37,7 +36,7 @@ class ConversionJob:
     error_message: str = ""
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
-    converter: Optional[BaseConverter] = None
+    converter: Optional[object] = None
 
     def update_progress(self, progress: int):
         """Обновляет прогресс задачи"""
@@ -128,7 +127,6 @@ class JobManager:
                 logger.info(f"Задача {job_id} отменена")
                 return True
             elif job and job.status == JobStatus.PROCESSING:
-                # TODO: Реализовать отмену активной задачи
                 logger.warning(f"Нельзя отменить выполняющуюся задачу {job_id}")
                 return False
         return False
@@ -157,8 +155,12 @@ class JobManager:
                     time.sleep(0.5)
                     continue
 
-                # Получаем следующую задачу
-                job = self.queue.get(timeout=1)
+                # Получаем следующую задачу с таймаутом
+                try:
+                    job = self.queue.get(timeout=1)
+                except:
+                    # Нет задач в очереди
+                    continue
 
                 # Проверяем, не отменена ли задача
                 if job.status == JobStatus.CANCELLED:
@@ -176,6 +178,8 @@ class JobManager:
             except Exception as e:
                 if not self.stop_event.is_set():
                     logger.error(f"Ошибка в процессе обработки очереди: {e}")
+                    import time
+                    time.sleep(1)
 
     def _process_job(self, job: ConversionJob):
         """Обрабатывает отдельную задачу"""

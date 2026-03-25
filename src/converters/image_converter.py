@@ -39,7 +39,6 @@ class ImageConverter(BaseConverter):
             self._update_status("Открытие изображения...")
             self._update_progress(10)
 
-            # Открываем изображение
             with Image.open(input_path) as img:
                 self._update_progress(30)
 
@@ -47,7 +46,6 @@ class ImageConverter(BaseConverter):
                 output_format = output_path.suffix.lower().lstrip('.')
                 if output_format in ['jpg', 'jpeg'] and img.mode == 'RGBA':
                     self._update_status("Конвертация цветового пространства...")
-                    # Создаем белый фон
                     background = Image.new('RGB', img.size, (255, 255, 255))
                     background.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
                     img = background
@@ -56,7 +54,7 @@ class ImageConverter(BaseConverter):
                 if self.max_width or self.max_height:
                     self._update_status("Изменение размера...")
                     img.thumbnail((self.max_width or img.width,
-                                   self.max_height or img.height),
+                                  self.max_height or img.height),
                                   Image.Resampling.LANCZOS)
 
                 self._update_progress(60)

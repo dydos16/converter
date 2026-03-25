@@ -9,10 +9,10 @@ from PySide6.QtWidgets import (
     QPushButton, QListWidget, QListWidgetItem, QLabel,
     QComboBox, QProgressBar, QFileDialog, QMessageBox,
     QGroupBox, QCheckBox, QSpinBox, QSlider,
-    QTabWidget, QTextEdit, QApplication
+    QTabWidget, QTextEdit, QApplication, QMenu
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QAction
 
 from src.converters.factory import ConverterFactory
 from src.core.job_manager import JobManager, ConversionJob, JobStatus
@@ -24,6 +24,7 @@ class ConversionWorker(QThread):
     """Поток для выполнения конвертации"""
     progress_updated = Signal(str, int)
     job_completed = Signal(str, bool, str)
+    job_finished = Signal()
 
     def __init__(self, job_manager: JobManager):
         super().__init__()
@@ -37,17 +38,42 @@ class ConversionWorker(QThread):
 class MainWindow(QMainWindow):
     """Главное окно приложения"""
 
+    # Сигналы для безопасного вызова из потоков
+    show_info_signal = Signal(str, str)
+    show_warning_signal = Signal(str, str)
+    show_error_signal = Signal(str, str)
+
     def __init__(self):
         super().__init__()
         self.settings = Settings()
         self.job_manager = JobManager(max_concurrent=self.settings.get('max_concurrent_jobs', 3))
         self.worker = ConversionWorker(self.job_manager)
 
+        # Подключаем сигналы
+        self.show_info_signal.connect(self._show_info_message)
+        self.show_warning_signal.connect(self._show_warning_message)
+        self.show_error_signal.connect(self._show_error_message)
+
         self.setup_ui()
         self.setup_callbacks()
         self.load_settings()
 
         self.worker.start()
+
+    @Slot(str, str)
+    def _show_info_message(self, title: str, message: str):
+        """Безопасно показывает информационное сообщение"""
+        QMessageBox.information(self, title, message)
+
+    @Slot(str, str)
+    def _show_warning_message(self, title: str, message: str):
+        """Безопасно показывает предупреждение"""
+        QMessageBox.warning(self, title, message)
+
+    @Slot(str, str)
+    def _show_error_message(self, title: str, message: str):
+        """Безопасно показывает ошибку"""
+        QMessageBox.critical(self, title, message)
 
     def setup_ui(self):
         """Настраивает интерфейс"""
@@ -106,6 +132,7 @@ class MainWindow(QMainWindow):
 
         self.output_format_combo = QComboBox()
         self.output_format_combo.setEnabled(False)
+        self.output_format_combo.currentTextChanged.connect(self.update_convert_button)
 
         format_layout.addWidget(QLabel("Из:"))
         format_layout.addWidget(self.input_format_combo)
@@ -147,6 +174,8 @@ class MainWindow(QMainWindow):
         self.file_list.setAcceptDrops(True)
         self.file_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.file_list.setMinimumHeight(300)
+        self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.file_list.customContextMenuRequested.connect(self.show_file_context_menu)
         layout.addWidget(QLabel("Файлы для конвертации:"))
         layout.addWidget(self.file_list)
 
@@ -173,7 +202,10 @@ class MainWindow(QMainWindow):
         quality_layout.addWidget(QLabel("Качество JPEG:"))
         self.quality_slider = QSlider(Qt.Orientation.Horizontal)
         self.quality_slider.setRange(1, 100)
-        self.quality_slider.setValue(self.settings.get('image_quality', 85))
+        quality_value = self.settings.get('image_quality', 85)
+        if quality_value is None:
+            quality_value = 85
+        self.quality_slider.setValue(int(quality_value))
         self.quality_label = QLabel(f"{self.quality_slider.value()}%")
         self.quality_slider.valueChanged.connect(
             lambda v: self.quality_label.setText(f"{v}%")
@@ -188,14 +220,20 @@ class MainWindow(QMainWindow):
         self.max_width_spin = QSpinBox()
         self.max_width_spin.setRange(0, 10000)
         self.max_width_spin.setSpecialValueText("Без ограничений")
-        self.max_width_spin.setValue(self.settings.get('image_max_width', 0))
+        width_value = self.settings.get('image_max_width', 0)
+        if width_value is None:
+            width_value = 0
+        self.max_width_spin.setValue(int(width_value))
 
         size_layout.addWidget(self.max_width_spin)
         size_layout.addWidget(QLabel("Макс. высота:"))
         self.max_height_spin = QSpinBox()
         self.max_height_spin.setRange(0, 10000)
         self.max_height_spin.setSpecialValueText("Без ограничений")
-        self.max_height_spin.setValue(self.settings.get('image_max_height', 0))
+        height_value = self.settings.get('image_max_height', 0)
+        if height_value is None:
+            height_value = 0
+        self.max_height_spin.setValue(int(height_value))
 
         image_layout.addLayout(size_layout)
         layout.addWidget(image_group)
@@ -205,13 +243,16 @@ class MainWindow(QMainWindow):
         general_layout = QVBoxLayout(general_group)
 
         self.auto_open_check = QCheckBox("Открывать папку после конвертации")
-        self.auto_open_check.setChecked(self.settings.get('auto_open_folder', True))
+        auto_open = self.settings.get('auto_open_folder', True)
+        self.auto_open_check.setChecked(auto_open if auto_open is not None else True)
 
         self.keep_name_check = QCheckBox("Сохранять оригинальное имя файла")
-        self.keep_name_check.setChecked(self.settings.get('keep_original_name', True))
+        keep_name = self.settings.get('keep_original_name', True)
+        self.keep_name_check.setChecked(keep_name if keep_name is not None else True)
 
         self.notifications_check = QCheckBox("Показывать уведомления")
-        self.notifications_check.setChecked(self.settings.get('show_notifications', True))
+        show_notifications = self.settings.get('show_notifications', True)
+        self.notifications_check.setChecked(show_notifications if show_notifications is not None else True)
 
         general_layout.addWidget(self.auto_open_check)
         general_layout.addWidget(self.keep_name_check)
@@ -232,7 +273,7 @@ class MainWindow(QMainWindow):
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont("Monospace", 9))
+        self.log_text.setFont(QFont("Courier", 10))
         layout.addWidget(self.log_text)
 
     def setup_callbacks(self):
@@ -256,37 +297,112 @@ class MainWindow(QMainWindow):
     def save_settings(self):
         """Сохраняет настройки"""
         self.settings.set('image_quality', self.quality_slider.value())
-        self.settings.set('image_max_width', self.max_width_spin.value() or None)
-        self.settings.set('image_max_height', self.max_height_spin.value() or None)
+        self.settings.set('image_max_width', self.max_width_spin.value() if self.max_width_spin.value() > 0 else None)
+        self.settings.set('image_max_height', self.max_height_spin.value() if self.max_height_spin.value() > 0 else None)
         self.settings.set('auto_open_folder', self.auto_open_check.isChecked())
         self.settings.set('keep_original_name', self.keep_name_check.isChecked())
         self.settings.set('show_notifications', self.notifications_check.isChecked())
 
-        QMessageBox.information(self, "Успех", "Настройки сохранены!")
+        self.show_info_signal.emit("Успех", "Настройки сохранены!")
 
     def on_input_format_changed(self, format_name: str):
         """Обработчик изменения входного формата"""
-        if format_name == 'Все':
+        if format_name == 'Все' or not format_name:
             self.output_format_combo.clear()
             self.output_format_combo.setEnabled(False)
+            self.output_format_combo.addItem("Сначала выберите формат")
+            self.convert_btn.setEnabled(False)
             return
 
         self.output_format_combo.setEnabled(True)
         self.output_format_combo.clear()
 
         formats = ConverterFactory.get_output_formats_for_input(format_name)
-        self.output_format_combo.addItems(formats)
+        if formats:
+            self.output_format_combo.addItems(formats)
+            if len(formats) > 0:
+                self.output_format_combo.setCurrentIndex(0)
+        else:
+            self.output_format_combo.addItem("Нет доступных форматов")
+            self.output_format_combo.setEnabled(False)
 
-        # Восстанавливаем последний использованный формат
-        recent_formats = self.settings.get('recent_formats', [])
-        for fmt in recent_formats:
-            if fmt.startswith(f"{format_name}→"):
-                out = fmt.split('→')[1]
-                if out in formats:
-                    index = self.output_format_combo.findText(out)
-                    if index >= 0:
-                        self.output_format_combo.setCurrentIndex(index)
-                        break
+        self.check_file_formats()
+        self.update_convert_button()
+
+    def detect_file_format(self, file_path: Path) -> str:
+        """Определяет формат файла по расширению"""
+        ext = file_path.suffix.lower().lstrip('.')
+
+        supported_formats = {
+            'docx': 'docx',
+            'doc': 'doc',
+            'pdf': 'pdf',
+            'png': 'png',
+            'jpg': 'jpg',
+            'jpeg': 'jpg',
+            'webp': 'webp',
+            'bmp': 'bmp',
+            'gif': 'gif',
+            'tiff': 'tiff',
+            'xlsx': 'xlsx',
+            'xls': 'xls',
+            'csv': 'csv',
+            'txt': 'txt'
+        }
+
+        return supported_formats.get(ext, ext)
+
+    def check_file_formats(self):
+        """Проверяет соответствие форматов файлов выбранному формату"""
+        input_format = self.input_format_combo.currentText()
+        if input_format == 'Все' or not input_format:
+            return True
+
+        all_valid = True
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            file_path = Path(item.data(Qt.ItemDataRole.UserRole))
+            ext = file_path.suffix.lower().lstrip('.')
+
+            if ext != input_format:
+                item.setForeground(Qt.GlobalColor.red)
+                all_valid = False
+            else:
+                item.setForeground(Qt.GlobalColor.white)
+
+        return all_valid
+
+    def update_convert_button(self):
+        """Обновляет состояние кнопки конвертации"""
+        has_files = self.file_list.count() > 0
+        has_format = self.input_format_combo.currentText() != 'Все' and self.input_format_combo.currentText()
+        has_output = bool(self.output_format_combo.currentText())
+
+        valid_files = True
+        if has_files and has_format:
+            input_format = self.input_format_combo.currentText()
+            for i in range(self.file_list.count()):
+                item = self.file_list.item(i)
+                file_path = Path(item.data(Qt.ItemDataRole.UserRole))
+                ext = file_path.suffix.lower().lstrip('.')
+                if ext != input_format:
+                    valid_files = False
+                    break
+
+        enabled = has_files and has_format and has_output and valid_files
+        self.convert_btn.setEnabled(enabled)
+
+        if not enabled:
+            if not has_files:
+                self.convert_btn.setToolTip("Добавьте файлы для конвертации")
+            elif not has_format:
+                self.convert_btn.setToolTip("Выберите входной формат")
+            elif not has_output:
+                self.convert_btn.setToolTip("Выберите выходной формат")
+            elif not valid_files:
+                self.convert_btn.setToolTip("Выбранные файлы не соответствуют формату")
+        else:
+            self.convert_btn.setToolTip("Начать конвертацию")
 
     def add_files(self):
         """Добавляет файлы через диалог"""
@@ -310,60 +426,139 @@ class MainWindow(QMainWindow):
 
         if folder:
             folder_path = Path(folder)
-            # Ищем поддерживаемые файлы
             for ext in ConverterFactory.get_input_formats():
                 for file_path in folder_path.glob(f"*.{ext}"):
                     self.add_file_to_list(file_path)
 
     def add_file_to_list(self, file_path: Path):
         """Добавляет файл в список"""
-        # Проверяем формат
         ext = file_path.suffix.lower().lstrip('.')
         if ext not in ConverterFactory.get_input_formats():
-            QMessageBox.warning(
-                self,
+            size_str = get_file_size_str(file_path)
+            item_text = f"⚠️ {file_path.name} ({size_str}) - формат {ext} не поддерживается"
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, str(file_path))
+            item.setForeground(Qt.GlobalColor.red)
+            self.file_list.addItem(item)
+            self.show_warning_signal.emit(
                 "Не поддерживается",
-                f"Формат {ext} не поддерживается для конвертации"
+                f"Формат {ext} не поддерживается для конвертации\nФайл добавлен, но не будет обработан"
             )
+            self.update_convert_button()
             return
 
-        # Добавляем в список
         size_str = get_file_size_str(file_path)
         item_text = f"📄 {file_path.name} ({size_str})"
         item = QListWidgetItem(item_text)
         item.setData(Qt.ItemDataRole.UserRole, str(file_path))
         self.file_list.addItem(item)
 
-        # Сохраняем в историю
         self.settings.add_recent_file(str(file_path))
 
+        current_format = self.input_format_combo.currentText()
+        if current_format == 'Все' or not current_format:
+            detected_format = self.detect_file_format(file_path)
+            if detected_format in ConverterFactory.get_input_formats():
+                index = self.input_format_combo.findText(detected_format)
+                if index >= 0:
+                    self.input_format_combo.setCurrentIndex(index)
+                    self.status_label.setText(f"Автоматически определен формат: {detected_format}")
+
+        self.check_file_formats()
         self.update_convert_button()
+        self.update_file_count()
 
     def clear_files(self):
         """Очищает список файлов"""
         self.file_list.clear()
         self.update_convert_button()
+        self.update_file_count()
+        self.status_label.setText("Готов к работе")
+
+    def update_file_count(self):
+        """Обновляет счетчик файлов"""
+        count = self.file_list.count()
+        if count == 0:
+            self.status_label.setText("Готов к работе")
+        else:
+            valid_count = 0
+            input_format = self.input_format_combo.currentText()
+            for i in range(count):
+                item = self.file_list.item(i)
+                file_path = Path(item.data(Qt.ItemDataRole.UserRole))
+                ext = file_path.suffix.lower().lstrip('.')
+                if ext == input_format or input_format == 'Все':
+                    valid_count += 1
+            self.status_label.setText(f"Готов к работе ({valid_count}/{count} файл(ов) соответствуют формату)")
+
+    def show_file_context_menu(self, position):
+        """Показывает контекстное меню для файлов"""
+        menu = QMenu()
+
+        remove_action = QAction("🗑️ Удалить из списка", menu)
+        remove_all_action = QAction("🗑️ Удалить все", menu)
+        clear_invalid_action = QAction("⚠️ Удалить неверные форматы", menu)
+
+        menu.addAction(remove_action)
+        menu.addAction(remove_all_action)
+        menu.addSeparator()
+        menu.addAction(clear_invalid_action)
+
+        action = menu.exec(self.file_list.mapToGlobal(position))
+
+        if action == remove_action:
+            for item in self.file_list.selectedItems():
+                self.file_list.takeItem(self.file_list.row(item))
+            self.update_convert_button()
+            self.update_file_count()
+
+        elif action == remove_all_action:
+            self.file_list.clear()
+            self.update_convert_button()
+            self.update_file_count()
+
+        elif action == clear_invalid_action:
+            input_format = self.input_format_combo.currentText()
+            if input_format != 'Все':
+                for i in range(self.file_list.count() - 1, -1, -1):
+                    item = self.file_list.item(i)
+                    file_path = Path(item.data(Qt.ItemDataRole.UserRole))
+                    ext = file_path.suffix.lower().lstrip('.')
+                    if ext != input_format:
+                        self.file_list.takeItem(i)
+                self.update_convert_button()
+                self.update_file_count()
 
     def start_conversion(self):
         """Запускает конвертацию"""
         if self.file_list.count() == 0:
+            self.show_warning_signal.emit("Ошибка", "Нет файлов для конвертации")
             return
 
         input_format = self.input_format_combo.currentText()
         output_format = self.output_format_combo.currentText()
 
         if input_format == 'Все':
-            QMessageBox.warning(
-                self,
+            self.show_warning_signal.emit(
                 "Ошибка",
                 "Пожалуйста, выберите конкретный входной формат"
             )
             return
 
-        # Сохраняем выбранные форматы
+        if not output_format:
+            self.show_warning_signal.emit("Ошибка", "Выберите выходной формат")
+            return
+
+        converter = ConverterFactory.get_converter(input_format, output_format)
+        if not converter:
+            self.show_warning_signal.emit(
+                "Ошибка",
+                f"Конвертация из {input_format} в {output_format} не поддерживается"
+            )
+            return
+
         self.settings.add_recent_format(input_format, output_format)
 
-        # Получаем директорию для сохранения
         output_dir = self.settings.get('output_directory')
         if not output_dir:
             output_dir = str(Path.home() / 'Downloads')
@@ -379,36 +574,43 @@ class MainWindow(QMainWindow):
 
         self.settings.set('output_directory', output_dir)
 
-        # Создаем задачи
+        added_count = 0
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
             input_path = Path(item.data(Qt.ItemDataRole.UserRole))
 
-            # Формируем имя выходного файла
+            ext = input_path.suffix.lower().lstrip('.')
+            if ext != input_format:
+                continue
+
             if self.settings.get('keep_original_name', True):
                 output_name = f"{input_path.stem}.{output_format}"
             else:
-                output_name = f"converted_{i+1}.{output_format}"
+                output_name = f"converted_{added_count+1}.{output_format}"
 
             output_path = Path(output_dir) / output_name
             output_path = get_unique_filename(output_path)
 
-            # Создаем директорию если нужно
             ensure_output_directory(output_path)
 
-            # Добавляем задачу
             self.job_manager.add_job(
                 input_path,
                 output_path,
                 input_format,
                 output_format
             )
+            added_count += 1
 
-        # Блокируем кнопку
+        if added_count == 0:
+            self.show_warning_signal.emit(
+                "Ошибка",
+                f"Нет файлов формата {input_format} для конвертации"
+            )
+            return
+
         self.convert_btn.setEnabled(False)
-        self.status_label.setText(f"Конвертация запущена ({self.job_manager.get_active_jobs_count()} активных задач)")
+        self.status_label.setText(f"Конвертация запущена ({added_count} файлов)")
 
-        # Запускаем таймер для обновления статуса
         self.status_timer = QTimer()
         self.status_timer.timeout.connect(self.update_status)
         self.status_timer.start(1000)
@@ -422,16 +624,17 @@ class MainWindow(QMainWindow):
 
         self.status_label.setText(f"Активных: {active}, Завершено: {completed}/{total}")
 
-        # Обновляем общий прогресс
         if total > 0:
             progress = int((completed / total) * 100)
             self.total_progress.setValue(progress)
 
-        # Если все задачи завершены
         if completed == total and total > 0:
             self.status_timer.stop()
             self.convert_btn.setEnabled(True)
             self.status_label.setText("Конвертация завершена!")
+            self.total_progress.setValue(0)
+
+            self.job_manager.jobs.clear()
 
             if self.settings.get('auto_open_folder', True):
                 import subprocess
@@ -443,15 +646,12 @@ class MainWindow(QMainWindow):
                 else:
                     subprocess.Popen(['xdg-open', output_dir])
 
-    def update_convert_button(self):
-        """Обновляет состояние кнопки конвертации"""
-        has_files = self.file_list.count() > 0
-        has_format = self.input_format_combo.currentText() != 'Все'
-        self.convert_btn.setEnabled(has_files and has_format)
-
     def on_job_started(self, job: ConversionJob):
         """Обработчик начала задачи"""
         self.log_text.append(f"✅ Начата конвертация: {job.input_path.name}")
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
 
     def on_job_progress(self, job: ConversionJob):
         """Обработчик прогресса задачи"""
@@ -460,10 +660,12 @@ class MainWindow(QMainWindow):
     def on_job_completed(self, job: ConversionJob):
         """Обработчик завершения задачи"""
         self.log_text.append(f"✔️ Завершено: {job.input_path.name} -> {job.output_path.name}")
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
 
         if self.settings.get('show_notifications', True):
-            QMessageBox.information(
-                self,
+            self.show_info_signal.emit(
                 "Конвертация завершена",
                 f"Файл {job.input_path.name} успешно сконвертирован!"
             )
@@ -471,10 +673,12 @@ class MainWindow(QMainWindow):
     def on_job_failed(self, job: ConversionJob):
         """Обработчик ошибки задачи"""
         self.log_text.append(f"❌ Ошибка: {job.input_path.name} - {job.error_message}")
+        self.log_text.verticalScrollBar().setValue(
+            self.log_text.verticalScrollBar().maximum()
+        )
 
         if self.settings.get('show_notifications', True):
-            QMessageBox.warning(
-                self,
+            self.show_error_signal.emit(
                 "Ошибка конвертации",
                 f"Не удалось сконвертировать {job.input_path.name}\n\n{job.error_message}"
             )

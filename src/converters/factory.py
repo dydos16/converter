@@ -1,5 +1,5 @@
 """
-Фабрика для создания конвертеров на основе форматов файлов
+Фабрика для создания конвертеров
 """
 from typing import Optional, Dict, Type
 from pathlib import Path
@@ -12,7 +12,6 @@ from loguru import logger
 class ConverterFactory:
     """Фабрика для создания конвертеров"""
 
-    # Регистр конвертеров
     _converters: Dict[str, Type[BaseConverter]] = {}
 
     @classmethod
@@ -25,14 +24,6 @@ class ConverterFactory:
     def get_converter(cls, input_ext: str, output_ext: str, **kwargs) -> Optional[BaseConverter]:
         """
         Возвращает подходящий конвертер для заданных форматов
-
-        Args:
-            input_ext: Входное расширение файла
-            output_ext: Выходное расширение файла
-            **kwargs: Дополнительные параметры для конвертера
-
-        Returns:
-            BaseConverter или None, если конвертер не найден
         """
         input_ext = input_ext.lower().lstrip('.')
         output_ext = output_ext.lower().lstrip('.')
@@ -43,7 +34,7 @@ class ConverterFactory:
 
         # Изображения
         if input_ext in ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tiff'] and \
-                output_ext in ['png', 'jpg', 'jpeg', 'webp', 'bmp']:
+           output_ext in ['png', 'jpg', 'jpeg', 'webp', 'bmp']:
             converter = ImageConverter()
             if 'quality' in kwargs:
                 converter.set_quality(kwargs['quality'])

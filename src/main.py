@@ -36,8 +36,10 @@ def main():
 
     logger.info("Запуск приложения File Converter Pro")
 
-    # Включаем поддержку высокого DPI
-    QApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
+    # Включаем поддержку высокого DPI для ретина-дисплеев
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
 
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
@@ -115,6 +117,18 @@ def main():
             color: #ffffff;
             border: 1px solid #555;
             padding: 3px;
+        }
+        QSlider::groove:horizontal {
+            height: 6px;
+            background: #3c3c3c;
+            border-radius: 3px;
+        }
+        QSlider::handle:horizontal {
+            background: #4CAF50;
+            width: 14px;
+            height: 14px;
+            margin: -4px 0;
+            border-radius: 7px;
         }
         QTextEdit {
             background-color: #1e1e1e;

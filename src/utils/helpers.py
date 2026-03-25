@@ -10,56 +10,6 @@ from typing import Optional
 import subprocess
 from loguru import logger
 
-# Пытаемся импортировать magic (не критично, если не установлен)
-try:
-    import magic
-    MAGIC_AVAILABLE = True
-except ImportError:
-    MAGIC_AVAILABLE = False
-    logger.warning("python-magic не установлен, определение MIME-типов будет ограничено")
-
-def find_libreoffice() -> Optional[Path]:
-    """
-    Находит путь к исполняемому файлу LibreOffice
-
-    Returns:
-        Path или None, если LibreOffice не найден
-    """
-    # Список возможных путей для разных ОС
-    possible_paths = []
-
-    if sys.platform == 'win32':
-        # Windows
-        possible_paths = [
-            r'C:\Program Files\LibreOffice\program\soffice.exe',
-            r'C:\Program Files (x86)\LibreOffice\program\soffice.exe',
-        ]
-    elif sys.platform == 'darwin':
-        # macOS
-        possible_paths = [
-            '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-        ]
-    else:
-        # Linux
-        possible_paths = [
-            '/usr/bin/libreoffice',
-            '/usr/bin/soffice',
-            '/opt/libreoffice/program/soffice',
-        ]
-
-    # Проверяем пути
-    for path in possible_paths:
-        p = Path(path)
-        if p.exists():
-            return p
-
-    # Проверяем в PATH
-    libreoffice = shutil.which('libreoffice') or shutil.which('soffice')
-    if libreoffice:
-        return Path(libreoffice)
-
-    return None
-
 
 def create_temp_dir() -> Path:
     """Создает временную директорию"""
@@ -80,14 +30,17 @@ def cleanup_temp_dir(temp_dir: Path):
 
 def get_file_size_str(path: Path) -> str:
     """Возвращает размер файла в человекочитаемом формате"""
-    size = path.stat().st_size
+    try:
+        size = path.stat().st_size
 
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if size < 1024.0:
-            return f"{size:.1f} {unit}"
-        size /= 1024.0
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
 
-    return f"{size:.1f} TB"
+        return f"{size:.1f} TB"
+    except Exception:
+        return "Unknown size"
 
 
 def ensure_output_directory(output_path: Path) -> bool:
@@ -103,8 +56,6 @@ def ensure_output_directory(output_path: Path) -> bool:
 def get_unique_filename(path: Path) -> Path:
     """
     Возвращает уникальное имя файла, если файл уже существует
-
-    Например: file.pdf -> file (1).pdf
     """
     if not path.exists():
         return path
@@ -123,9 +74,6 @@ def get_unique_filename(path: Path) -> Path:
 def validate_file(file_path: Path, allowed_extensions: list[str]) -> tuple[bool, str]:
     """
     Проверяет файл на валидность
-
-    Returns:
-        tuple[bool, str]: (валиден, сообщение_об_ошибке)
     """
     if not file_path.exists():
         return False, "Файл не существует"
@@ -137,16 +85,18 @@ def validate_file(file_path: Path, allowed_extensions: list[str]) -> tuple[bool,
     if ext not in allowed_extensions:
         return False, f"Формат {ext} не поддерживается"
 
-    # Проверяем размер (максимум 500MB)
     max_size = 500 * 1024 * 1024
-    if file_path.stat().st_size > max_size:
-        return False, f"Файл слишком большой (максимум 500MB)"
+    try:
+        if file_path.stat().st_size > max_size:
+            return False, f"Файл слишком большой (максимум 500MB)"
+    except Exception:
+        pass
 
     return True, "OK"
 
 
 def get_file_icon(extension: str) -> str:
-    """Возвращает эмодзи или иконку для типа файла"""
+    """Возвращает эмодзи для типа файла"""
     icons = {
         'pdf': '📄',
         'docx': '📝',
