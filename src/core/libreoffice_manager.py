@@ -30,7 +30,7 @@ class LibreOfficeManager:
         self.system = platform.system().lower()
         self.arch = platform.machine().lower()
         self.setup_paths()
-        self.version = "24.8.4"  # Стабильная версия
+        self.version = "7.6.7"  # Стабильная версия
 
     def setup_paths(self):
         """Настраивает пути для хранения LibreOffice"""
@@ -67,25 +67,28 @@ class LibreOfficeManager:
     def get_download_info(self) -> tuple:
         """
         Возвращает (url, filename, extract_dir, installer_type)
+        Используем официальные зеркала
         """
+        # Базовый URL с официального сайта
+        base_url = "https://downloadarchive.documentfoundation.org/libreoffice/old"
+
         if self.system == 'darwin':
             # macOS - DMG файл
-            url = f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg"
+            url = f"{base_url}/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg"
             filename = f"LibreOffice_{self.version}_MacOS.dmg"
             extract_dir = "LibreOffice.app"
             installer_type = "dmg"
 
         elif self.system == 'windows':
-            # Windows - MSI или EXE
-            # Используем MSI для тихой установки
-            url = f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi"
+            # Windows - MSI
+            url = f"{base_url}/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi"
             filename = f"LibreOffice_{self.version}_Win.msi"
             extract_dir = "LibreOffice"
             installer_type = "msi"
 
         else:
             # Linux
-            url = f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_rpm.tar.gz"
+            url = f"{base_url}/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_rpm.tar.gz"
             filename = f"LibreOffice_{self.version}_Linux.tar.gz"
             extract_dir = "LibreOffice"
             installer_type = "tar"
@@ -114,7 +117,26 @@ class LibreOfficeManager:
                 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
             }
 
-            response = requests.get(url, stream=True, timeout=30, headers=headers)
+            response = requests.get(url, stream=True, timeout=60, headers=headers)
+
+            # Если первая ссылка не работает, пробуем запасную
+            if response.status_code != 200:
+                logger.warning(f"Первая ссылка не работает, пробуем запасную...")
+                # Запасные ссылки
+                fallback_urls = [
+                    f"https://ftp.osuosl.org/pub/libreoffice/libreoffice/old/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg",
+                    f"https://mirror.yandex.ru/linux/libreoffice/libreoffice/old/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg",
+                ]
+
+                for fallback_url in fallback_urls:
+                    if self.system == 'windows':
+                        fallback_url = fallback_url.replace('mac/x86_64', 'win/x86_64').replace('.dmg', '.msi')
+                    response = requests.get(fallback_url, stream=True, timeout=60, headers=headers)
+                    if response.status_code == 200:
+                        url = fallback_url
+                        logger.info(f"Используем запасную ссылку: {url}")
+                        break
+
             response.raise_for_status()
 
             total_size = int(response.headers.get('content-length', 0))
@@ -147,7 +169,9 @@ class LibreOfficeManager:
             mount_point.mkdir(exist_ok=True)
 
             # Монтируем DMG
-            self._update_status("Монтирование DMG...", progress_callback, 50)
+            if progress_callback:
+                progress_callback(50)
+            logger.info("Монтирование DMG...")
 
             mount_result = subprocess.run(
                 ['hdiutil', 'attach', str(filepath), '-mountpoint', str(mount_point)],
@@ -159,7 +183,9 @@ class LibreOfficeManager:
                 raise Exception(f"Не удалось смонтировать DMG: {mount_result.stderr}")
 
             # Ищем приложение
-            self._update_status("Копирование приложения...", progress_callback, 70)
+            if progress_callback:
+                progress_callback(70)
+            logger.info("Копирование приложения...")
 
             app_source = mount_point / "LibreOffice.app"
             if not app_source.exists():
@@ -180,7 +206,9 @@ class LibreOfficeManager:
             shutil.copytree(app_source, self.libreoffice_dir)
 
             # Размонтируем
-            self._update_status("Размонтирование...", progress_callback, 90)
+            if progress_callback:
+                progress_callback(90)
+            logger.info("Размонтирование...")
             subprocess.run(['hdiutil', 'detach', mount_point], capture_output=True)
 
             return True
@@ -198,12 +226,14 @@ class LibreOfficeManager:
             temp_dir = self.base_dir / "temp"
             temp_dir.mkdir(exist_ok=True)
 
-            self._update_status("Распаковка MSI...", progress_callback, 50)
+            if progress_callback:
+                progress_callback(50)
+            logger.info("Распаковка MSI...")
 
             # Извлекаем MSI
             extract_cmd = [
                 'msiexec', '/a', str(filepath),
-                '/qb', f'TARGETDIR={temp_dir}'
+                '/qb', f'TARGETDIR={str(temp_dir)}'
             ]
 
             result = subprocess.run(
@@ -217,9 +247,11 @@ class LibreOfficeManager:
                 raise Exception(f"Ошибка распаковки MSI: {result.stderr}")
 
             # Ищем извлеченные файлы
-            self._update_status("Поиск установленных файлов...", progress_callback, 70)
+            if progress_callback:
+                progress_callback(70)
+            logger.info("Поиск установленных файлов...")
 
-            # Ищем папку LibreOffice
+            # Ищем папку LibreOffice в Program Files
             program_files = Path("C:/Program Files/LibreOffice")
             program_files_x86 = Path("C:/Program Files (x86)/LibreOffice")
 
@@ -250,14 +282,18 @@ class LibreOfficeManager:
     def install_on_linux(self, filepath: Path, progress_callback=None) -> bool:
         """Установка на Linux"""
         try:
-            self._update_status("Распаковка архива...", progress_callback, 50)
+            if progress_callback:
+                progress_callback(50)
+            logger.info("Распаковка архива...")
 
             # Распаковываем tar.gz
             with tarfile.open(filepath, 'r:gz') as tar:
                 tar.extractall(self.base_dir)
 
             # Ищем извлеченную папку
-            self._update_status("Поиск файлов...", progress_callback, 70)
+            if progress_callback:
+                progress_callback(70)
+            logger.info("Поиск файлов...")
 
             extracted = list(self.base_dir.glob('LibreOffice_*'))[0]
 
@@ -277,12 +313,6 @@ class LibreOfficeManager:
         except Exception as e:
             logger.error(f"Ошибка установки на Linux: {e}")
             return False
-
-    def _update_status(self, message: str, callback: Optional[Callable], progress: int):
-        """Обновляет статус"""
-        if callback:
-            callback(progress)
-        logger.info(message)
 
     def install(self, progress_callback: Optional[Callable] = None) -> bool:
         """Полная установка LibreOffice"""
