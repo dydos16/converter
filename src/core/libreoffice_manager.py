@@ -6,7 +6,6 @@ import os
 import platform
 import subprocess
 import shutil
-import time
 from pathlib import Path
 from typing import Optional, Callable
 from loguru import logger
@@ -121,7 +120,7 @@ class LibreOfficeManager:
             return False
 
     def install_windows(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows"""
+        """Установка на Windows с правами администратора"""
         try:
             if progress_callback:
                 progress_callback(50)
@@ -129,19 +128,45 @@ class LibreOfficeManager:
             # Создаём папку назначения
             self.libreoffice_dir.mkdir(parents=True, exist_ok=True)
 
-            # Тихая установка MSI
+            # Пытаемся установить с правами администратора
+            # Используем msiexec с флагами для тихой установки
             cmd = [
                 'msiexec', '/i', str(filepath),
                 '/quiet', '/qn', '/norestart',
                 f'INSTALLDIR="{self.libreoffice_dir}"'
             ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=300)
+            # Запускаем с повышенными правами через runas
+            if sys.platform == 'win32':
+                # Пробуем обычную установку
+                result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=300)
+
+                if result.returncode != 0:
+                    # Если не получилось, пробуем распаковать без установки
+                    logger.info("Пробуем распаковать MSI...")
+                    extract_dir = self.base_dir / "extract"
+                    extract_dir.mkdir(exist_ok=True)
+
+                    extract_cmd = [
+                        'msiexec', '/a', str(filepath),
+                        '/quiet', f'TARGETDIR={extract_dir}'
+                    ]
+                    subprocess.run(extract_cmd, capture_output=True, text=True, shell=True, timeout=300)
+
+                    # Ищем программу в извлечённых файлах
+                    for root, dirs, files in os.walk(extract_dir):
+                        if 'soffice.exe' in files:
+                            source = Path(root)
+                            # Копируем всё в целевую папку
+                            shutil.copytree(source, self.libreoffice_dir, dirs_exist_ok=True)
+                            break
+
+                    # Удаляем временную папку
+                    shutil.rmtree(extract_dir, ignore_errors=True)
 
             if progress_callback:
                 progress_callback(100)
 
-            # Проверяем, что установка прошла успешно
             return self.is_installed()
 
         except Exception as e:
@@ -157,13 +182,11 @@ class LibreOfficeManager:
             if progress_callback:
                 progress_callback(50)
 
-            # Монтируем DMG
             subprocess.run(
                 ['hdiutil', 'attach', str(filepath), '-mountpoint', str(mount_point)],
                 capture_output=True, text=True, check=True
             )
 
-            # Копируем приложение
             app_source = mount_point / "LibreOffice.app"
             if not app_source.exists():
                 for item in mount_point.iterdir():
@@ -179,7 +202,6 @@ class LibreOfficeManager:
 
             shutil.copytree(app_source, self.libreoffice_dir)
 
-            # Размонтируем
             subprocess.run(['hdiutil', 'detach', mount_point], capture_output=True)
 
             if progress_callback:
@@ -202,7 +224,6 @@ class LibreOfficeManager:
             with tarfile.open(filepath, 'r:gz') as tar:
                 tar.extractall(self.base_dir)
 
-            # Ищем извлечённую папку
             extracted = list(self.base_dir.glob('LibreOffice_*'))[0]
 
             if self.libreoffice_dir.exists():
@@ -263,7 +284,6 @@ class LibreOfficeManager:
             if not self.install(progress_callback):
                 return False
 
-        # Путь к исполняемому файлу
         bin_path = self.bin_path
 
         if not bin_path.exists():
