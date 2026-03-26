@@ -120,57 +120,63 @@ class LibreOfficeManager:
             return False
 
     def install_windows(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows с правами администратора"""
+        """Установка на Windows - распаковка MSI без прав администратора"""
         try:
             if progress_callback:
                 progress_callback(50)
 
-            # Создаём папку назначения
-            self.libreoffice_dir.mkdir(parents=True, exist_ok=True)
+            # Папка для распаковки
+            extract_dir = self.base_dir / "extract"
+            extract_dir.mkdir(exist_ok=True)
 
-            # Пытаемся установить с правами администратора
-            # Используем msiexec с флагами для тихой установки
-            cmd = [
-                'msiexec', '/i', str(filepath),
-                '/quiet', '/qn', '/norestart',
-                f'INSTALLDIR="{self.libreoffice_dir}"'
+            # Распаковываем MSI
+            logger.info("Распаковка LibreOffice...")
+            extract_cmd = [
+                'msiexec', '/a', str(filepath),
+                '/quiet', f'TARGETDIR={extract_dir}'
             ]
 
-            # Запускаем с повышенными правами через runas
-            if sys.platform == 'win32':
-                # Пробуем обычную установку
-                result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=300)
+            result = subprocess.run(
+                extract_cmd,
+                capture_output=True,
+                text=True,
+                shell=True,
+                timeout=120
+            )
 
-                if result.returncode != 0:
-                    # Если не получилось, пробуем распаковать без установки
-                    logger.info("Пробуем распаковать MSI...")
-                    extract_dir = self.base_dir / "extract"
-                    extract_dir.mkdir(exist_ok=True)
+            if result.returncode != 0:
+                logger.warning(f"Распаковка вернула код {result.returncode}")
 
-                    extract_cmd = [
-                        'msiexec', '/a', str(filepath),
-                        '/quiet', f'TARGETDIR={extract_dir}'
-                    ]
-                    subprocess.run(extract_cmd, capture_output=True, text=True, shell=True, timeout=300)
+            # Ищем папку с программой
+            found = False
+            for root, dirs, files in os.walk(extract_dir):
+                if 'soffice.exe' in files:
+                    source = Path(root)
+                    logger.info(f"Найдена программа в: {source}")
 
-                    # Ищем программу в извлечённых файлах
-                    for root, dirs, files in os.walk(extract_dir):
-                        if 'soffice.exe' in files:
-                            source = Path(root)
-                            # Копируем всё в целевую папку
-                            shutil.copytree(source, self.libreoffice_dir, dirs_exist_ok=True)
-                            break
+                    # Копируем в целевую папку
+                    if self.libreoffice_dir.exists():
+                        shutil.rmtree(self.libreoffice_dir)
 
-                    # Удаляем временную папку
-                    shutil.rmtree(extract_dir, ignore_errors=True)
+                    shutil.copytree(source, self.libreoffice_dir)
+                    found = True
+                    break
+
+            # Удаляем временную папку
+            shutil.rmtree(extract_dir, ignore_errors=True)
 
             if progress_callback:
                 progress_callback(100)
 
-            return self.is_installed()
+            if found:
+                logger.info("LibreOffice успешно распакован")
+                return self.is_installed()
+            else:
+                logger.error("Не найдены файлы LibreOffice в распакованном MSI")
+                return False
 
         except Exception as e:
-            logger.error(f"Ошибка установки: {e}")
+            logger.error(f"Ошибка распаковки: {e}")
             return False
 
     def install_macos(self, filepath: Path, progress_callback=None) -> bool:
