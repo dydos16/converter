@@ -1,11 +1,12 @@
 """
-Менеджер для автоматической установки LibreOffice
+Менеджер для автоматической установки и использования LibreOffice
 """
 import sys
 import os
 import platform
 import subprocess
 import shutil
+import time
 from pathlib import Path
 from typing import Optional, Callable
 from loguru import logger
@@ -120,7 +121,7 @@ class LibreOfficeManager:
             return False
 
     def install_windows(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows - распаковка MSI через 7z"""
+        """Установка на Windows - распаковка MSI"""
         try:
             if progress_callback:
                 progress_callback(30)
@@ -133,25 +134,47 @@ class LibreOfficeManager:
 
             logger.info("Распаковка MSI...")
 
-            # Пробуем распаковать через py7zr (работает с MSI)
-            try:
-                import py7zr
-                with py7zr.SevenZipFile(filepath, mode='r') as z:
-                    z.extractall(extract_dir)
-            except:
-                # Если не получилось, пробуем через msiexec /a
-                logger.info("Пробуем msiexec /a...")
-                cmd = ['msiexec', '/a', str(filepath), '/quiet', f'TARGETDIR={extract_dir}']
-                subprocess.run(cmd, capture_output=True, shell=True, timeout=120)
+            # Пробуем распаковать через msiexec /a
+            logger.info("Запуск msiexec /a...")
+            cmd = ['msiexec', '/a', str(filepath), '/quiet', f'TARGETDIR={extract_dir}']
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                shell=True,
+                timeout=180
+            )
+
+            logger.info(f"msiexec завершён с кодом: {result.returncode}")
+            if result.stdout:
+                logger.info(f"stdout: {result.stdout[:500]}")
+            if result.stderr:
+                logger.info(f"stderr: {result.stderr[:500]}")
 
             if progress_callback:
-                progress_callback(70)
+                progress_callback(60)
+
+            # Выводим содержимое папки для отладки
+            logger.info("Содержимое папки распаковки:")
+            for item in extract_dir.iterdir():
+                logger.info(f"  - {item.name}")
+                if item.is_dir():
+                    try:
+                        sub_items = list(item.iterdir())
+                        for sub in sub_items[:5]:  # Показываем первые 5
+                            logger.info(f"    - {sub.name}")
+                        if len(sub_items) > 5:
+                            logger.info(f"    ... и ещё {len(sub_items)-5}")
+                    except:
+                        pass
 
             # Ищем папку с программой
             found = False
             search_dirs = [
                 extract_dir / "PFiles" / "LibreOffice",
                 extract_dir / "Program Files" / "LibreOffice",
+                extract_dir / "ProgramFiles" / "LibreOffice",
                 extract_dir / "LibreOffice",
             ]
 
@@ -166,6 +189,7 @@ class LibreOfficeManager:
 
             if not found:
                 # Рекурсивный поиск soffice.exe
+                logger.info("Ищем soffice.exe рекурсивно...")
                 for root, dirs, files in os.walk(extract_dir):
                     if 'soffice.exe' in files:
                         source = Path(root)
@@ -177,7 +201,10 @@ class LibreOfficeManager:
                         break
 
             # Удаляем временную папку
-            shutil.rmtree(extract_dir, ignore_errors=True)
+            try:
+                shutil.rmtree(extract_dir, ignore_errors=True)
+            except:
+                pass
 
             if progress_callback:
                 progress_callback(100)
@@ -186,9 +213,12 @@ class LibreOfficeManager:
                 logger.info("LibreOffice успешно установлен")
                 return self.is_installed()
             else:
-                logger.error("Не удалось найти файлы LibreOffice")
+                logger.error("Не удалось найти файлы LibreOffice в распакованном MSI")
                 return False
 
+        except subprocess.TimeoutExpired:
+            logger.error("Превышено время ожидания распаковки")
+            return False
         except Exception as e:
             logger.error(f"Ошибка установки: {e}")
             import traceback
