@@ -6,8 +6,6 @@ import os
 import platform
 import subprocess
 import shutil
-import zipfile
-import tarfile
 from pathlib import Path
 from typing import Optional, Callable
 from loguru import logger
@@ -26,7 +24,7 @@ class LibreOfficeManager:
         self.system = platform.system().lower()
         self.arch = platform.machine().lower()
         self.setup_paths()
-        self.version = "24.8.4"  # Последняя стабильная версия
+        self.version = "24.8.4"
 
     def setup_paths(self):
         """Настраивает пути для хранения LibreOffice"""
@@ -66,23 +64,19 @@ class LibreOfficeManager:
                Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe').exists():
                 return True
         else:
-            import shutil
             if shutil.which('libreoffice') or shutil.which('soffice'):
                 return True
 
         return False
 
     def get_download_url(self) -> str:
-        """Возвращает рабочую ссылку для скачивания"""
+        """Возвращает рабочую ссылку для скачивания (SourceForge)"""
         if self.system == 'darwin':
-            # macOS
-            return f"https://ftp.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg"
+            return f"https://sourceforge.net/projects/libreoffice.mirror/files/stable/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg/download"
         elif self.system == 'windows':
-            # Windows
-            return f"https://ftp.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi"
+            return f"https://sourceforge.net/projects/libreoffice.mirror/files/stable/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi/download"
         else:
-            # Linux
-            return f"https://ftp.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_rpm.tar.gz"
+            return f"https://sourceforge.net/projects/libreoffice.mirror/files/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_rpm.tar.gz/download"
 
     def download(self, progress_callback: Optional[Callable] = None) -> bool:
         """Скачивает LibreOffice"""
@@ -91,7 +85,7 @@ class LibreOfficeManager:
             return False
 
         url = self.get_download_url()
-        filename = url.split('/')[-1]
+        filename = url.split('/')[-2]  # Имя файла из URL
         filepath = self.base_dir / filename
 
         if filepath.exists():
@@ -105,7 +99,7 @@ class LibreOfficeManager:
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
 
-            response = requests.get(url, stream=True, timeout=60, headers=headers)
+            response = requests.get(url, stream=True, timeout=60, headers=headers, allow_redirects=True)
             response.raise_for_status()
 
             total_size = int(response.headers.get('content-length', 0))
@@ -143,7 +137,7 @@ class LibreOfficeManager:
             )
 
             if result.returncode != 0:
-                raise Exception(f"Ошибка монтирования: {result.stderr}")
+                raise Exception(f"Ошибка монтирования")
 
             # Копируем приложение
             app_source = mount_point / "LibreOffice.app"
@@ -192,24 +186,6 @@ class LibreOfficeManager:
                 timeout=300
             )
 
-            if result.returncode != 0:
-                # Пробуем распаковать
-                temp_dir = self.base_dir / "temp"
-                temp_dir.mkdir(exist_ok=True)
-
-                extract_cmd = [
-                    'msiexec', '/a', str(filepath),
-                    '/quiet', f'TARGETDIR={temp_dir}'
-                ]
-                subprocess.run(extract_cmd, capture_output=True, text=True, shell=True)
-
-                # Ищем установленные файлы
-                for root, dirs, files in os.walk(temp_dir):
-                    if 'soffice.exe' in files:
-                        source = Path(root).parent
-                        shutil.copytree(source, self.libreoffice_dir)
-                        break
-
             return self.is_installed()
 
         except Exception as e:
@@ -222,7 +198,7 @@ class LibreOfficeManager:
             if progress_callback:
                 progress_callback(50)
 
-            # Распаковываем tar.gz
+            import tarfile
             with tarfile.open(filepath, 'r:gz') as tar:
                 tar.extractall(self.base_dir)
 
@@ -234,7 +210,6 @@ class LibreOfficeManager:
 
             extracted.rename(self.libreoffice_dir)
 
-            # Делаем исполняемым
             if self.bin_path.exists():
                 self.bin_path.chmod(0o755)
 
@@ -256,7 +231,7 @@ class LibreOfficeManager:
             return False
 
         url = self.get_download_url()
-        filename = url.split('/')[-1]
+        filename = url.split('/')[-2]
         filepath = self.base_dir / filename
 
         if not filepath.exists():
@@ -285,26 +260,10 @@ class LibreOfficeManager:
             if not self.install(progress_callback):
                 return False
 
-        # Используем системный путь или встроенный
+        # Используем встроенный путь
         bin_path = self.bin_path
 
         if not bin_path.exists():
-            # Ищем системный
-            if self.system == 'darwin':
-                bin_path = Path('/Applications/LibreOffice.app/Contents/MacOS/soffice')
-            elif self.system == 'windows':
-                if Path('C:/Program Files/LibreOffice/program/soffice.exe').exists():
-                    bin_path = Path('C:/Program Files/LibreOffice/program/soffice.exe')
-                elif Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe').exists():
-                    bin_path = Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe')
-            else:
-                import shutil
-                soffice = shutil.which('libreoffice') or shutil.which('soffice')
-                if soffice:
-                    bin_path = Path(soffice)
-
-        if not bin_path.exists():
-            logger.error("LibreOffice не найден")
             return False
 
         cmd = [
