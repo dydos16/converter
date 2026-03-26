@@ -120,79 +120,92 @@ class LibreOfficeManager:
             return False
 
     def install_windows(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows - распаковка MSI без прав администратора"""
+        """Установка на Windows - скачивание portable-версии"""
         try:
             if progress_callback:
                 progress_callback(30)
 
-            # Папка для распаковки
-            extract_dir = self.base_dir / "extract"
+            # Ссылка на portable версию (zip-архив с уже готовой программой)
+            # Используем зеркало с архивом
+            portable_url = "https://ftp.osuosl.org/pub/libreoffice/libreoffice/portable/24.8.4/LibreOfficePortable_24.8.4_Multilingual.paf.exe"
+
+            # Альтернатива - прямая ссылка на zip с программой
+            zip_url = "https://download.documentfoundation.org/libreoffice/portable/24.8.4/LibreOfficePortable_24.8.4_Multilingual.paf.exe"
+
+            filename = "LibreOfficePortable.exe"
+            portable_path = self.base_dir / filename
+
+            logger.info("Скачивание portable версии LibreOffice...")
+
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+            # Пробуем скачать portable
+            response = requests.get(zip_url, stream=True, timeout=120, headers=headers)
+
+            if response.status_code != 200:
+                response = requests.get(portable_url, stream=True, timeout=120, headers=headers)
+
+            if response.status_code != 200:
+                raise Exception("Не удалось скачать portable версию")
+
+            total_size = int(response.headers.get('content-length', 0))
+            downloaded = 0
+
+            with open(portable_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        if progress_callback and total_size > 0:
+                            progress = 30 + int((downloaded / total_size) * 40)
+                            progress_callback(progress)
+
+            if progress_callback:
+                progress_callback(70)
+
+            # Распаковываем portable-версию
+            import zipfile
+            extract_dir = self.base_dir / "extract_portable"
             if extract_dir.exists():
                 shutil.rmtree(extract_dir)
             extract_dir.mkdir(parents=True, exist_ok=True)
 
-            logger.info(f"Распаковка MSI в {extract_dir}...")
-
-            # Распаковываем MSI
-            extract_cmd = [
-                'msiexec', '/a', str(filepath),
-                '/quiet', f'TARGETDIR={extract_dir}'
-            ]
-
-            result = subprocess.run(
-                extract_cmd,
-                capture_output=True,
-                text=True,
-                shell=True,
-                timeout=180
-            )
-
-            logger.info(f"Распаковка завершена, код: {result.returncode}")
+            # Пробуем распаковать как zip
+            try:
+                with zipfile.ZipFile(portable_path, 'r') as zf:
+                    zf.extractall(extract_dir)
+            except:
+                # Если не zip, может быть exe с самораспаковкой - используем 7z
+                import py7zr
+                with py7zr.SevenZipFile(portable_path, mode='r') as z:
+                    z.extractall(extract_dir)
 
             if progress_callback:
-                progress_callback(60)
+                progress_callback(85)
 
             # Ищем soffice.exe
             found = False
-            search_paths = []
-
-            # Разные возможные пути
-            possible_dirs = [
-                extract_dir / "PFiles" / "LibreOffice",
-                extract_dir / "Program Files" / "LibreOffice",
-                extract_dir / "LibreOffice",
-            ]
-
-            # Ищем рекурсивно
             for root, dirs, files in os.walk(extract_dir):
                 if 'soffice.exe' in files:
                     source = Path(root)
                     logger.info(f"Найдена программа в: {source}")
-                    search_paths.append(source)
+                    if self.libreoffice_dir.exists():
+                        shutil.rmtree(self.libreoffice_dir)
+                    shutil.copytree(source, self.libreoffice_dir)
                     found = True
                     break
 
             if not found:
-                # Показываем содержимое для отладки
-                logger.info(f"Содержимое {extract_dir}:")
+                # Если не нашли, пробуем скопировать всё
                 for item in extract_dir.iterdir():
-                    logger.info(f"  - {item.name}")
-                    if item.is_dir():
-                        for sub in item.iterdir():
-                            logger.info(f"    - {sub.name}")
+                    if item.is_dir() and 'LibreOffice' in item.name:
+                        shutil.copytree(item, self.libreoffice_dir, dirs_exist_ok=True)
+                        found = True
+                        break
 
-            if found:
-                # Копируем в целевую папку
-                if self.libreoffice_dir.exists():
-                    shutil.rmtree(self.libreoffice_dir)
-
-                shutil.copytree(source, self.libreoffice_dir)
-                logger.info(f"LibreOffice скопирован в {self.libreoffice_dir}")
-            else:
-                logger.error("Не найден soffice.exe в распакованном MSI")
-
-            # Удаляем временную папку
+            # Удаляем временные файлы
             shutil.rmtree(extract_dir, ignore_errors=True)
+            portable_path.unlink(missing_ok=True)
 
             if progress_callback:
                 progress_callback(100)
@@ -200,7 +213,7 @@ class LibreOfficeManager:
             return self.is_installed()
 
         except Exception as e:
-            logger.error(f"Ошибка распаковки: {e}")
+            logger.error(f"Ошибка установки portable: {e}")
             import traceback
             logger.error(traceback.format_exc())
             return False
