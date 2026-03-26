@@ -123,14 +123,17 @@ class LibreOfficeManager:
         """Установка на Windows - распаковка MSI без прав администратора"""
         try:
             if progress_callback:
-                progress_callback(50)
+                progress_callback(30)
 
             # Папка для распаковки
             extract_dir = self.base_dir / "extract"
-            extract_dir.mkdir(exist_ok=True)
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+
+            logger.info(f"Распаковка MSI в {extract_dir}...")
 
             # Распаковываем MSI
-            logger.info("Распаковка LibreOffice...")
             extract_cmd = [
                 'msiexec', '/a', str(filepath),
                 '/quiet', f'TARGETDIR={extract_dir}'
@@ -141,26 +144,52 @@ class LibreOfficeManager:
                 capture_output=True,
                 text=True,
                 shell=True,
-                timeout=120
+                timeout=180
             )
 
-            if result.returncode != 0:
-                logger.warning(f"Распаковка вернула код {result.returncode}")
+            logger.info(f"Распаковка завершена, код: {result.returncode}")
 
-            # Ищем папку с программой
+            if progress_callback:
+                progress_callback(60)
+
+            # Ищем soffice.exe
             found = False
+            search_paths = []
+
+            # Разные возможные пути
+            possible_dirs = [
+                extract_dir / "PFiles" / "LibreOffice",
+                extract_dir / "Program Files" / "LibreOffice",
+                extract_dir / "LibreOffice",
+            ]
+
+            # Ищем рекурсивно
             for root, dirs, files in os.walk(extract_dir):
                 if 'soffice.exe' in files:
                     source = Path(root)
                     logger.info(f"Найдена программа в: {source}")
-
-                    # Копируем в целевую папку
-                    if self.libreoffice_dir.exists():
-                        shutil.rmtree(self.libreoffice_dir)
-
-                    shutil.copytree(source, self.libreoffice_dir)
+                    search_paths.append(source)
                     found = True
                     break
+
+            if not found:
+                # Показываем содержимое для отладки
+                logger.info(f"Содержимое {extract_dir}:")
+                for item in extract_dir.iterdir():
+                    logger.info(f"  - {item.name}")
+                    if item.is_dir():
+                        for sub in item.iterdir():
+                            logger.info(f"    - {sub.name}")
+
+            if found:
+                # Копируем в целевую папку
+                if self.libreoffice_dir.exists():
+                    shutil.rmtree(self.libreoffice_dir)
+
+                shutil.copytree(source, self.libreoffice_dir)
+                logger.info(f"LibreOffice скопирован в {self.libreoffice_dir}")
+            else:
+                logger.error("Не найден soffice.exe в распакованном MSI")
 
             # Удаляем временную папку
             shutil.rmtree(extract_dir, ignore_errors=True)
@@ -168,15 +197,12 @@ class LibreOfficeManager:
             if progress_callback:
                 progress_callback(100)
 
-            if found:
-                logger.info("LibreOffice успешно распакован")
-                return self.is_installed()
-            else:
-                logger.error("Не найдены файлы LibreOffice в распакованном MSI")
-                return False
+            return self.is_installed()
 
         except Exception as e:
             logger.error(f"Ошибка распаковки: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
 
     def install_macos(self, filepath: Path, progress_callback=None) -> bool:
