@@ -1,16 +1,21 @@
 """
-DOCX to PDF - через python-docx2pdf
-Поддерживает .docx и .doc
+DOCX to PDF - с автоматической установкой LibreOffice
+Поддерживает: .docx, .doc
 """
 from pathlib import Path
 import sys
 import shutil
 import subprocess
 from .base import BaseConverter
+from src.core.libreoffice_manager import LibreOfficeManager
 from loguru import logger
 
 
 class DocxToPdfConverter(BaseConverter):
+
+    def __init__(self):
+        super().__init__()
+        self.lo_manager = LibreOfficeManager()
 
     def get_input_formats(self):
         return ['docx', 'doc']
@@ -137,16 +142,32 @@ LibreOffice не найден. Для конвертации DOC/DOCX в PDF н�
     def convert(self, input_path: Path, output_path: Path) -> bool:
         try:
             self._update_status("Проверка зависимостей...")
-            self._update_progress(20)
+            self._update_progress(10)
 
-            # Проверяем LibreOffice
+            # Проверяем наличие LibreOffice
             if not self.check_libreoffice():
-                self._handle_error(self.get_install_instructions())
-                return False
+                # Пробуем использовать встроенный менеджер для автоматической установки
+                self._update_status("LibreOffice не найден. Начинается автоматическая установка...")
+                self._update_progress(20)
+
+                def progress_callback(progress: int):
+                    p = 20 + int(progress * 0.4)
+                    self._update_progress(p)
+                    self._update_status(f"Установка LibreOffice: {progress}%")
+
+                if not self.lo_manager.install(progress_callback):
+                    self._handle_error(self.get_install_instructions())
+                    return False
+
+                self._update_status("LibreOffice успешно установлен!")
+                self._update_progress(60)
+            else:
+                self._update_status("LibreOffice найден")
+                self._update_progress(60)
 
             ext = input_path.suffix.lower()
             self._update_status(f"Конвертация {ext} в PDF...")
-            self._update_progress(50)
+            self._update_progress(65)
 
             success = False
 

@@ -1,5 +1,5 @@
 """
-PowerPoint to PDF - через LibreOffice
+PowerPoint to PDF - через LibreOffice с автоматической установкой
 Поддерживает: .pptx, .ppt, .pps, .ppsx
 """
 from pathlib import Path
@@ -7,10 +7,15 @@ import sys
 import shutil
 import subprocess
 from .base import BaseConverter
+from src.core.libreoffice_manager import LibreOfficeManager
 from loguru import logger
 
 
 class PptxToPdfConverter(BaseConverter):
+
+    def __init__(self):
+        super().__init__()
+        self.lo_manager = LibreOfficeManager()
 
     def get_input_formats(self):
         return ['pptx', 'ppt', 'pps', 'ppsx']
@@ -125,22 +130,42 @@ LibreOffice не найден. Для конвертации PowerPoint файл
             ext = input_path.suffix.lower()
 
             self._update_status("Проверка зависимостей...")
-            self._update_progress(20)
+            self._update_progress(10)
 
-            # Проверяем LibreOffice
+            # Проверяем наличие LibreOffice
             if not self.check_libreoffice():
-                self._handle_error(self.get_install_instructions())
-                return False
+                # Пробуем использовать встроенный менеджер для автоматической установки
+                self._update_status("LibreOffice не найден. Начинается автоматическая установка...")
+                self._update_progress(20)
+
+                def progress_callback(progress: int):
+                    p = 20 + int(progress * 0.4)
+                    self._update_progress(p)
+                    self._update_status(f"Установка LibreOffice: {progress}%")
+
+                if not self.lo_manager.install(progress_callback):
+                    self._handle_error(self.get_install_instructions())
+                    return False
+
+                self._update_status("LibreOffice успешно установлен!")
+                self._update_progress(60)
+            else:
+                self._update_status("LibreOffice найден")
+                self._update_progress(60)
 
             self._update_status(f"Конвертация {ext} в PDF...")
-            self._update_progress(50)
+            self._update_progress(65)
 
             # Находим soffice
             soffice_path = self.find_soffice()
 
             if not soffice_path:
-                self._handle_error("Не удалось найти LibreOffice")
-                return False
+                # Проверяем встроенную версию
+                if self.lo_manager.is_installed():
+                    soffice_path = str(self.lo_manager.bin_path)
+                else:
+                    self._handle_error("Не удалось найти LibreOffice")
+                    return False
 
             # Запускаем конвертацию
             cmd = [
@@ -159,6 +184,8 @@ LibreOffice не найден. Для конвертации PowerPoint файл
                 text=True,
                 timeout=300
             )
+
+            self._update_progress(90)
 
             # Проверяем результат
             expected_pdf = output_path.parent / f"{input_path.stem}.pdf"
@@ -182,6 +209,7 @@ LibreOffice не найден. Для конвертации PowerPoint файл
                         pdf_file.rename(output_path)
                         self._update_progress(100)
                         self._update_status("Готово!")
+                        logger.success(f"PDF создан: {output_path}")
                         return True
 
                 error_msg = result.stderr if result.stderr else "PDF не создан"
