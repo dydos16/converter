@@ -67,12 +67,9 @@ class DependencyManager:
                 progress_callback(i, len(self.missing_packages), package)
 
             try:
-                subprocess.run(
-                    [sys.executable, '-m', 'pip', 'install', package_spec],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
+                # Добавляем флаг --break-system-packages для обхода защиты
+                cmd = [sys.executable, '-m', 'pip', 'install', package_spec, '--break-system-packages']
+                subprocess.run(cmd, capture_output=True, text=True, check=True)
                 logger.info(f"Установлен: {package}")
             except subprocess.CalledProcessError as e:
                 logger.error(f"Ошибка установки {package}: {e.stderr}")
