@@ -142,57 +142,78 @@ LibreOffice не найден. Для конвертации DOC/DOCX в PDF н�
     def convert(self, input_path: Path, output_path: Path) -> bool:
         try:
             self._update_status("Проверка зависимостей...")
-            self._update_progress(10)
+            self._update_progress(20)
 
-            # Проверяем наличие LibreOffice
-            if not self.check_libreoffice():
-                # Пробуем использовать встроенный менеджер для автоматической установки
-                self._update_status("LibreOffice не найден. Начинается автоматическая установка...")
-                self._update_progress(20)
-
-                def progress_callback(progress: int):
-                    p = 20 + int(progress * 0.4)
-                    self._update_progress(p)
-                    self._update_status(f"Установка LibreOffice: {progress}%")
-
-                if not self.lo_manager.install(progress_callback):
+            # Проверяем LibreOffice
+            if not self.lo_manager.is_installed():
+                self._update_status("LibreOffice не найден. Установка...")
+                if not self.lo_manager.install():
                     self._handle_error(self.get_install_instructions())
                     return False
 
-                self._update_status("LibreOffice успешно установлен!")
-                self._update_progress(60)
-            else:
-                self._update_status("LibreOffice найден")
-                self._update_progress(60)
-
             ext = input_path.suffix.lower()
             self._update_status(f"Конвертация {ext} в PDF...")
-            self._update_progress(65)
+            self._update_progress(50)
 
-            success = False
+            # Получаем путь к soffice
+            soffice_path = self.lo_manager.bin_path
 
-            # Пробуем docx2pdf для DOCX
-            if ext == '.docx':
-                try:
-                    from docx2pdf import convert
-                    convert(str(input_path), str(output_path))
-                    success = output_path.exists()
-                except:
-                    success = self.convert_with_libreoffice(input_path, output_path)
+            # На Windows проверяем что файл существует
+            if not soffice_path.exists():
+                self._handle_error(f"LibreOffice не найден по пути: {soffice_path}")
+                return False
 
-            # Для DOC используем LibreOffice напрямую
-            elif ext == '.doc':
-                success = self.convert_with_libreoffice(input_path, output_path)
+            # Запускаем конвертацию напрямую через LibreOffice
+            cmd = [
+                str(soffice_path),
+                '--headless',
+                '--convert-to', 'pdf',
+                '--outdir', str(output_path.parent),
+                str(input_path)
+            ]
 
-            if success and output_path.exists() and output_path.stat().st_size > 0:
+            logger.info(f"Запуск: {' '.join(cmd)}")
+
+            # Запускаем процесс
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                shell=True
+            )
+
+            logger.info(f"Код возврата: {result.returncode}")
+            if result.stdout:
+                logger.info(f"stdout: {result.stdout}")
+            if result.stderr:
+                logger.info(f"stderr: {result.stderr}")
+
+            # Проверяем результат
+            expected_pdf = output_path.parent / f"{input_path.stem}.pdf"
+            if expected_pdf.exists():
+                if expected_pdf != output_path:
+                    expected_pdf.rename(output_path)
                 self._update_progress(100)
                 self._update_status("Готово!")
                 logger.success(f"PDF создан: {output_path}")
                 return True
-            else:
-                self._handle_error("Не удалось создать PDF")
-                return False
 
+            # Ищем PDF в папке
+            for pdf_file in output_path.parent.glob("*.pdf"):
+                if pdf_file.stat().st_size > 0:
+                    pdf_file.rename(output_path)
+                    self._update_progress(100)
+                    self._update_status("Готово!")
+                    logger.success(f"PDF создан: {output_path}")
+                    return True
+
+            self._handle_error(f"PDF не создан. stderr: {result.stderr}")
+            return False
+
+        except subprocess.TimeoutExpired:
+            self._handle_error("Превышено время конвертации")
+            return False
         except Exception as e:
             self._handle_error(str(e))
             logger.exception("Ошибка конвертации")
