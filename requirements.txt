@@ -16,9 +16,11 @@ Pillow==12.1.1
 # Network
 requests==2.31.0
 
-# Windows MSI support
-pymsi==0.1.0
+
 
 # Utilities
 loguru==0.7.3
 colorama==0.4.6
+
+# Windows MSI support
+pymsi==0.1.0

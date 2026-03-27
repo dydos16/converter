@@ -1,13 +1,12 @@
 """
 Менеджер для автоматической установки и использования LibreOffice
-Поддержка Windows через pymsi
+Поддержка macOS, Windows, Linux
 """
 import sys
 import os
 import platform
 import subprocess
 import shutil
-import zipfile
 import tarfile
 import time
 from pathlib import Path
@@ -20,17 +19,6 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
-# Для Windows используем pymsi
-if sys.platform == 'win32':
-    try:
-        import msilib
-        MSI_AVAILABLE = True
-    except ImportError:
-        MSI_AVAILABLE = False
-        logger.warning("pymsi не установлен. Установите: pip install pymsi")
-else:
-    MSI_AVAILABLE = False
-
 
 class LibreOfficeManager:
     """Автоматическая установка и управление LibreOffice"""
@@ -39,8 +27,8 @@ class LibreOfficeManager:
         self.system = platform.system().lower()
         self.arch = platform.machine().lower()
         self.setup_paths()
-        self.version = "26.2.1"
-        self.lang = "ru"
+        # Используем последнюю стабильную версию 25.8.5 (поддерживается до июня 2026)
+        self.version = "25.8.5"
 
     def setup_paths(self):
         """Настраивает пути для хранения LibreOffice"""
@@ -73,25 +61,18 @@ class LibreOfficeManager:
 
         # Проверяем системную установку
         if self.system == 'darwin':
-            paths = [
-                Path('/Applications/LibreOffice.app/Contents/MacOS/soffice'),
-                Path('/Applications/LibreOffice.app/Contents/MacOS/libreoffice'),
-            ]
-            for path in paths:
-                if path.exists():
-                    self.bin_path = path
-                    return True
-
+            if Path('/Applications/LibreOffice.app/Contents/MacOS/soffice').exists():
+                self.bin_path = Path('/Applications/LibreOffice.app/Contents/MacOS/soffice')
+                return True
         elif self.system == 'windows':
-            paths = [
-                Path('C:/Program Files/LibreOffice/program/soffice.exe'),
-                Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe'),
-            ]
-            for path in paths:
-                if path.exists():
-                    self.bin_path = path
-                    return True
+            if Path('C:/Program Files/LibreOffice/program/soffice.exe').exists():
+                self.bin_path = Path('C:/Program Files/LibreOffice/program/soffice.exe')
+                return True
+            if Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe').exists():
+                self.bin_path = Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe')
+                return True
         else:
+            # Linux
             import shutil
             soffice = shutil.which('libreoffice') or shutil.which('soffice')
             if soffice:
@@ -113,13 +94,16 @@ class LibreOfficeManager:
                 f"https://ftp-osl.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi",
             ]
         else:
+            # Linux - используем deb или rpm в зависимости от дистрибутива
+            # Сначала пробуем установить через пакетный менеджер, если не получится - скачиваем
             return [
+                f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_deb.tar.gz",
                 f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_rpm.tar.gz",
-                f"https://ftp-osl.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_rpm.tar.gz",
+                f"https://ftp-osl.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_deb.tar.gz",
             ]
 
     def download(self, progress_callback: Optional[Callable] = None) -> bool:
-        """Скачивает LibreOffice с повторными попытками"""
+        """Скачивает LibreOffice"""
         if not REQUESTS_AVAILABLE:
             logger.error("requests не установлен")
             return False
@@ -134,13 +118,15 @@ class LibreOfficeManager:
 
         for url in urls:
             try:
-                logger.info(f"Скачивание LibreOffice с {url}")
+                logger.info("Скачивание LibreOffice...")
 
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
                 response = requests.get(url, stream=True, timeout=120, headers=headers, allow_redirects=True)
+
+                if response.status_code == 404:
+                    logger.warning(f"Ссылка не найдена (404), пробуем следующую...")
+                    continue
+
                 response.raise_for_status()
 
                 total_size = int(response.headers.get('content-length', 0))
@@ -159,104 +145,14 @@ class LibreOfficeManager:
                 return True
 
             except Exception as e:
-                logger.warning(f"Ошибка скачивания с {url}: {e}")
+                logger.warning(f"Ошибка скачивания: {e}")
                 continue
 
         logger.error("Не удалось скачать LibreOffice ни с одного зеркала")
         return False
 
-    def install_windows_pymsi(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows через pymsi (распаковка MSI)"""
-        try:
-            if not MSI_AVAILABLE:
-                logger.warning("pymsi не доступен, пробуем другой метод")
-                return self.install_windows_msiexec(filepath, progress_callback)
-
-            if progress_callback:
-                progress_callback(30)
-
-            import msilib
-            import msilib.schema
-
-            logger.info("Распаковка MSI через pymsi...")
-
-            # Создаём папку для распаковки
-            extract_dir = self.base_dir / "extract_msi"
-            if extract_dir.exists():
-                shutil.rmtree(extract_dir)
-            extract_dir.mkdir(parents=True, exist_ok=True)
-
-            # Открываем MSI
-            db = msilib.OpenDatabase(str(filepath), msilib.MSIDBOPEN_READONLY)
-
-            # Извлекаем файлы
-            view = db.OpenView("SELECT `File`, `FileName`, `Component_` FROM `File`")
-            view.Execute(None)
-
-            total_files = 0
-            files = []
-            while True:
-                record = view.Fetch()
-                if not record:
-                    break
-                file_id = record.GetString(1)
-                file_name = record.GetString(2)
-                component = record.GetString(3)
-                files.append((file_id, file_name, component))
-                total_files += 1
-
-            if progress_callback:
-                progress_callback(50)
-
-            # Извлекаем файлы
-            for i, (file_id, file_name, component) in enumerate(files):
-                if progress_callback:
-                    progress_callback(50 + int((i / max(total_files, 1)) * 40))
-
-                # Получаем путь к файлу
-                file_path = extract_dir / file_name
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-
-                # Извлекаем файл
-                view2 = db.OpenView(f"SELECT `Data` FROM `_Streams` WHERE `Name` = '{file_id}'")
-                view2.Execute(None)
-                record2 = view2.Fetch()
-                if record2:
-                    data = record2.GetString(1)
-                    with open(file_path, 'wb') as f:
-                        f.write(data.encode('latin1') if isinstance(data, str) else data)
-
-            db.Close()
-
-            if progress_callback:
-                progress_callback(90)
-
-            # Ищем soffice.exe
-            found = False
-            for root, dirs, files in os.walk(extract_dir):
-                if 'soffice.exe' in files:
-                    source = Path(root)
-                    logger.info(f"Найден soffice.exe в: {source}")
-                    if self.libreoffice_dir.exists():
-                        shutil.rmtree(self.libreoffice_dir)
-                    shutil.copytree(source, self.libreoffice_dir)
-                    found = True
-                    break
-
-            # Удаляем временную папку
-            shutil.rmtree(extract_dir, ignore_errors=True)
-
-            if progress_callback:
-                progress_callback(100)
-
-            return found and self.is_installed()
-
-        except Exception as e:
-            logger.error(f"Ошибка установки через pymsi: {e}")
-            return False
-
-    def install_windows_msiexec(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows через msiexec /a"""
+    def install_windows(self, filepath: Path, progress_callback=None) -> bool:
+        """Установка на Windows"""
         try:
             if progress_callback:
                 progress_callback(30)
@@ -266,7 +162,7 @@ class LibreOfficeManager:
                 shutil.rmtree(extract_dir)
             extract_dir.mkdir(parents=True, exist_ok=True)
 
-            logger.info("Распаковка MSI через msiexec...")
+            logger.info("Распаковка MSI...")
 
             cmd = ['msiexec', '/a', str(filepath), '/quiet', f'TARGETDIR={extract_dir}']
             result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=180)
@@ -296,19 +192,8 @@ class LibreOfficeManager:
             return found and self.is_installed()
 
         except Exception as e:
-            logger.error(f"Ошибка установки через msiexec: {e}")
+            logger.error(f"Ошибка установки: {e}")
             return False
-
-    def install_windows(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows"""
-        # Пробуем pymsi
-        if MSI_AVAILABLE:
-            success = self.install_windows_pymsi(filepath, progress_callback)
-            if success:
-                return True
-
-        # Если pymsi не сработал, пробуем msiexec
-        return self.install_windows_msiexec(filepath, progress_callback)
 
     def install_macos(self, filepath: Path, progress_callback=None) -> bool:
         """Установка на macOS"""
@@ -351,24 +236,137 @@ class LibreOfficeManager:
             subprocess.run(['hdiutil', 'detach', mount_point], capture_output=True)
             return False
 
+    def install_linux_system(self, progress_callback=None) -> bool:
+        """Устанавливает LibreOffice через системный пакетный менеджер"""
+        try:
+            if progress_callback:
+                progress_callback(20)
+
+            # Определяем дистрибутив
+            if os.path.exists('/etc/debian_version'):
+                # Debian/Ubuntu/Kali
+                logger.info("Установка LibreOffice через apt...")
+
+                subprocess.run(['sudo', 'apt', 'update'], capture_output=True, check=False)
+
+                if progress_callback:
+                    progress_callback(50)
+
+                result = subprocess.run(
+                    ['sudo', 'apt', 'install', '-y', 'libreoffice'],
+                    capture_output=True,
+                    text=True
+                )
+
+                if progress_callback:
+                    progress_callback(90)
+
+                if result.returncode == 0:
+                    logger.info("LibreOffice установлен через apt")
+                    return self.is_installed()
+                else:
+                    logger.error(f"Ошибка установки: {result.stderr}")
+                    return False
+
+            elif os.path.exists('/etc/fedora-release') or os.path.exists('/etc/redhat-release'):
+                # Fedora/RHEL
+                logger.info("Установка LibreOffice через dnf/yum...")
+
+                if progress_callback:
+                    progress_callback(50)
+
+                if shutil.which('dnf'):
+                    result = subprocess.run(['sudo', 'dnf', 'install', '-y', 'libreoffice'], capture_output=True)
+                else:
+                    result = subprocess.run(['sudo', 'yum', 'install', '-y', 'libreoffice'], capture_output=True)
+
+                if progress_callback:
+                    progress_callback(90)
+
+                if result.returncode == 0:
+                    logger.info("LibreOffice установлен через пакетный менеджер")
+                    return self.is_installed()
+                else:
+                    return False
+
+            elif os.path.exists('/etc/arch-release'):
+                # Arch
+                logger.info("Установка LibreOffice через pacman...")
+
+                if progress_callback:
+                    progress_callback(50)
+
+                result = subprocess.run(['sudo', 'pacman', '-S', '--noconfirm', 'libreoffice-fresh'], capture_output=True)
+
+                if progress_callback:
+                    progress_callback(90)
+
+                if result.returncode == 0:
+                    logger.info("LibreOffice установлен через pacman")
+                    return self.is_installed()
+                else:
+                    return False
+
+            return False
+
+        except Exception as e:
+            logger.error(f"Ошибка установки через системный менеджер: {e}")
+            return False
+
     def install_linux(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Linux"""
+        """Установка на Linux из архива"""
         try:
             if progress_callback:
                 progress_callback(50)
 
+            extract_dir = self.base_dir / "extract_linux"
+            if extract_dir.exists():
+                shutil.rmtree(extract_dir)
+            extract_dir.mkdir(parents=True, exist_ok=True)
+
+            logger.info("Распаковка архива...")
+
             with tarfile.open(filepath, 'r:gz') as tar:
-                tar.extractall(self.base_dir)
+                tar.extractall(extract_dir)
 
-            extracted = list(self.base_dir.glob('LibreOffice_*'))[0]
+            if progress_callback:
+                progress_callback(70)
 
-            if self.libreoffice_dir.exists():
-                shutil.rmtree(self.libreoffice_dir)
+            # Ищем папку с программой
+            extracted = None
+            for item in extract_dir.iterdir():
+                if item.is_dir() and 'LibreOffice' in item.name:
+                    extracted = item
+                    break
 
-            extracted.rename(self.libreoffice_dir)
+            if not extracted:
+                for root, dirs, files in os.walk(extract_dir):
+                    for dir_name in dirs:
+                        if 'LibreOffice' in dir_name:
+                            extracted = Path(root) / dir_name
+                            break
+                    if extracted:
+                        break
+
+            if not extracted:
+                raise Exception("Не найдена папка LibreOffice")
+
+            # Ищем program/soffice
+            program_dir = extracted / "program"
+            if program_dir.exists():
+                shutil.copytree(extracted, self.libreoffice_dir)
+            else:
+                # Ищем глубже
+                for root, dirs, files in os.walk(extracted):
+                    if 'soffice' in files:
+                        source = Path(root)
+                        shutil.copytree(source, self.libreoffice_dir)
+                        break
 
             if self.bin_path.exists():
                 self.bin_path.chmod(0o755)
+
+            shutil.rmtree(extract_dir, ignore_errors=True)
 
             if progress_callback:
                 progress_callback(100)
@@ -385,6 +383,15 @@ class LibreOfficeManager:
             logger.info("LibreOffice уже установлен")
             return True
 
+        # На Linux сначала пробуем через пакетный менеджер
+        if self.system == 'linux':
+            logger.info("Пробуем установить LibreOffice через системный менеджер...")
+            if self.install_linux_system(progress_callback):
+                return True
+
+            logger.info("Системная установка не удалась, пробуем скачать...")
+
+        # Скачиваем
         if not self.download(progress_callback):
             return False
 
@@ -402,7 +409,6 @@ class LibreOfficeManager:
         else:
             success = self.install_linux(filepath, progress_callback)
 
-        # Удаляем файл установки после успеха
         if success and filepath.exists():
             try:
                 filepath.unlink()
