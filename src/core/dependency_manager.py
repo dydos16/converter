@@ -151,3 +151,17 @@ class DependencyManager:
                 return False
 
         return True
+
+    def install_libreoffice(self, progress_callback=None) -> bool:
+        """Устанавливает LibreOffice"""
+        from .libreoffice_manager import LibreOfficeManager
+
+        manager = LibreOfficeManager()
+
+        if manager.is_installed():
+            return True
+
+        # Открываем страницу загрузки или показываем инструкцию
+        print("\n" + manager.get_install_instructions())
+
+        return False
