@@ -152,7 +152,7 @@ class LibreOfficeManager:
         return False
 
     def install_windows(self, filepath: Path, progress_callback=None) -> bool:
-        """Установка на Windows"""
+        """Установка на Windows - распаковка MSI"""
         try:
             if progress_callback:
                 progress_callback(30)
@@ -180,9 +180,24 @@ class LibreOfficeManager:
                     logger.info(f"Найден soffice.exe в: {source}")
                     if self.libreoffice_dir.exists():
                         shutil.rmtree(self.libreoffice_dir)
-                    shutil.copytree(source, self.libreoffice_dir)
+                    # Копируем всю папку program
+                    if source.name == 'program':
+                        # Копируем родительскую папку
+                        parent = source.parent
+                        shutil.copytree(parent, self.libreoffice_dir)
+                    else:
+                        shutil.copytree(source, self.libreoffice_dir)
                     found = True
                     break
+
+            # Проверяем, что бинарник лежит по правильному пути
+            if found:
+                if not self.bin_path.exists():
+                    # Если не нашли, ищем в скопированной папке
+                    for root, dirs, files in os.walk(self.libreoffice_dir):
+                        if 'soffice.exe' in files:
+                            logger.info(f"soffice.exe найден в: {Path(root)}")
+                            break
 
             shutil.rmtree(extract_dir, ignore_errors=True)
 
