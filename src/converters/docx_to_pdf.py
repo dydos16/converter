@@ -1,11 +1,11 @@
 """
-DOCX to PDF - с автоматической установкой LibreOffice
-Поддерживает: .docx, .doc
+DOCX to PDF - через LibreOffice
 """
 from pathlib import Path
 import sys
 import shutil
 import subprocess
+import time
 from .base import BaseConverter
 from src.core.libreoffice_manager import LibreOfficeManager
 from loguru import logger
@@ -23,164 +23,70 @@ class DocxToPdfConverter(BaseConverter):
     def get_output_formats(self):
         return ['pdf']
 
-    def check_libreoffice(self):
-        """Проверяет наличие LibreOffice"""
-        paths = []
-
-        if sys.platform == 'darwin':  # macOS
-            paths = [
-                '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-                '/Applications/LibreOffice.app/Contents/MacOS/libreoffice',
-            ]
-        elif sys.platform == 'win32':  # Windows
-            paths = [
-                r'C:\Program Files\LibreOffice\program\soffice.exe',
-                r'C:\Program Files (x86)\LibreOffice\program\soffice.exe',
-            ]
-        else:  # Linux
-            paths = [
-                '/usr/bin/libreoffice',
-                '/usr/bin/soffice',
-                '/opt/libreoffice/program/soffice',
-            ]
-
-        for path in paths:
-            if Path(path).exists():
-                logger.info(f"LibreOffice найден: {path}")
-                return True
-
-        if shutil.which('soffice') or shutil.which('libreoffice'):
-            logger.info("LibreOffice найден в PATH")
-            return True
-
-        return False
-
-    def convert_docx_with_docx2pdf(self, input_path, output_path):
-        """Конвертация DOCX через docx2pdf"""
-        try:
-            from docx2pdf import convert
-            convert(str(input_path), str(output_path))
-            return True
-        except ImportError:
-            return False
-
-    def convert_with_libreoffice(self, input_path, output_path):
-        """Конвертация через LibreOffice напрямую"""
-        soffice_path = None
-
-        # Ищем soffice
-        paths = [
-            '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-            '/usr/bin/soffice',
-            '/usr/bin/libreoffice',
-        ]
-
-        if sys.platform == 'win32':
-            paths = [
-                r'C:\Program Files\LibreOffice\program\soffice.exe',
-                r'C:\Program Files (x86)\LibreOffice\program\soffice.exe',
-            ]
-
-        for path in paths:
-            if Path(path).exists():
-                soffice_path = path
-                break
-
-        if not soffice_path:
-            soffice_path = shutil.which('soffice') or shutil.which('libreoffice')
-
-        if not soffice_path:
-            return False
-
-        # Запускаем конвертацию
-        cmd = [
-            str(soffice_path),
-            '--headless',
-            '--convert-to', 'pdf',
-            '--outdir', str(output_path.parent),
-            str(input_path)
-        ]
-
-        result = subprocess.run(cmd, capture_output=True, text=True)
-
-        # Проверяем результат
-        expected_pdf = output_path.parent / f"{input_path.stem}.pdf"
-        if expected_pdf.exists() and expected_pdf != output_path:
-            expected_pdf.rename(output_path)
-
-        return result.returncode == 0 or output_path.exists()
-
-    def get_install_instructions(self):
-        """Инструкция по установке"""
-        if sys.platform == 'darwin':
-            return """
-LibreOffice не найден. Для конвертации DOC/DOCX в PDF необходимо установить LibreOffice.
-
-Установите через Homebrew:
-  brew install --cask libreoffice
-
-Или скачайте с официального сайта:
-  https://www.libreoffice.org/download/
-            """
-        elif sys.platform == 'win32':
-            return """
-LibreOffice не найден. Для конвертации DOC/DOCX в PDF необходимо установить LibreOffice.
-
-Скачайте установщик с официального сайта:
-  https://www.libreoffice.org/download/
-            """
-        else:
-            return """
-LibreOffice не найден. Для конвертации DOC/DOCX в PDF необходимо установить LibreOffice.
-
-Установите через пакетный менеджер:
-  sudo apt install libreoffice     (Ubuntu/Debian)
-  sudo yum install libreoffice     (CentOS/RHEL)
-  sudo pacman -S libreoffice-fresh (Arch)
-            """
-
     def convert(self, input_path: Path, output_path: Path) -> bool:
         try:
-            self._update_status("Проверка зависимостей...")
+            self._update_status("Проверка LibreOffice...")
             self._update_progress(20)
 
-            # Проверяем LibreOffice
+            # Проверяем наличие LibreOffice
             if not self.lo_manager.is_installed():
                 self._update_status("LibreOffice не найден. Установка...")
+                self._update_progress(30)
                 if not self.lo_manager.install():
-                    self._handle_error(self.get_install_instructions())
+                    self._handle_error("Не удалось установить LibreOffice")
                     return False
-
-            ext = input_path.suffix.lower()
-            self._update_status(f"Конвертация {ext} в PDF...")
-            self._update_progress(50)
 
             # Получаем путь к soffice
             soffice_path = self.lo_manager.bin_path
-
-            # На Windows проверяем что файл существует
             if not soffice_path.exists():
-                self._handle_error(f"LibreOffice не найден по пути: {soffice_path}")
+                # Ищем в системе
+                if sys.platform == 'darwin':
+                    soffice_path = Path('/Applications/LibreOffice.app/Contents/MacOS/soffice')
+                elif sys.platform == 'win32':
+                    paths = [
+                        Path('C:/Program Files/LibreOffice/program/soffice.exe'),
+                        Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe'),
+                    ]
+                    for path in paths:
+                        if path.exists():
+                            soffice_path = path
+                            break
+                else:
+                    which_soffice = shutil.which('libreoffice') or shutil.which('soffice')
+                    if which_soffice:
+                        soffice_path = Path(which_soffice)
+
+            if not soffice_path.exists():
+                self._handle_error(f"LibreOffice не найден: {soffice_path}")
                 return False
 
-            # Запускаем конвертацию напрямую через LibreOffice
+            self._update_status(f"Конвертация {input_path.name} в PDF...")
+            self._update_progress(50)
+
+            # Абсолютные пути
+            abs_input = input_path.absolute()
+            abs_output = output_path.absolute()
+
+            # Команда
             cmd = [
                 str(soffice_path),
                 '--headless',
                 '--convert-to', 'pdf',
-                '--outdir', str(output_path.parent),
-                str(input_path)
+                '--outdir', str(abs_output.parent),
+                str(abs_input)
             ]
 
             logger.info(f"Запуск: {' '.join(cmd)}")
 
-            # Запускаем процесс
+            # Для Windows нужен shell=True
+            use_shell = sys.platform == 'win32'
+
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=300,
-                shell=True
+                shell=use_shell
             )
 
             logger.info(f"Код возврата: {result.returncode}")
@@ -189,23 +95,29 @@ LibreOffice не найден. Для конвертации DOC/DOCX в PDF н�
             if result.stderr:
                 logger.info(f"stderr: {result.stderr}")
 
-            # Проверяем результат
-            expected_pdf = output_path.parent / f"{input_path.stem}.pdf"
+            self._update_progress(80)
+
+            # Ждём
+            time.sleep(1)
+
+            # Ищем PDF
+            expected_pdf = abs_output.parent / f"{abs_input.stem}.pdf"
             if expected_pdf.exists():
-                if expected_pdf != output_path:
-                    expected_pdf.rename(output_path)
+                if expected_pdf != abs_output:
+                    expected_pdf.rename(abs_output)
                 self._update_progress(100)
                 self._update_status("Готово!")
-                logger.success(f"PDF создан: {output_path}")
+                logger.success(f"PDF создан: {abs_output}")
                 return True
 
-            # Ищем PDF в папке
-            for pdf_file in output_path.parent.glob("*.pdf"):
-                if pdf_file.stat().st_size > 0:
-                    pdf_file.rename(output_path)
+            # Ищем все PDF
+            for pdf in abs_output.parent.glob("*.pdf"):
+                if pdf.stat().st_size > 0:
+                    if pdf != abs_output:
+                        pdf.rename(abs_output)
                     self._update_progress(100)
                     self._update_status("Готово!")
-                    logger.success(f"PDF создан: {output_path}")
+                    logger.success(f"PDF создан: {abs_output}")
                     return True
 
             self._handle_error(f"PDF не создан. stderr: {result.stderr}")
