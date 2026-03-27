@@ -3,19 +3,17 @@
 Запуск приложения с автоматической установкой зависимостей
 """
 import sys
-import time
+import subprocess
 from pathlib import Path
 
 # Добавляем текущую директорию в путь
 sys.path.insert(0, str(Path(__file__).parent))
 
-from loguru import logger
-
 
 def show_progress(current, total, message):
     """Показывает прогресс установки"""
     percent = int((current / total) * 100)
-    bar_length = 50
+    bar_length = 40
     filled = int(bar_length * current / total)
     bar = '█' * filled + '░' * (bar_length - filled)
     print(f"\r[{bar}] {percent}% - {message}", end='', flush=True)
@@ -28,10 +26,8 @@ def main():
     print("=" * 60 + "\n")
 
     try:
-        # Импортируем менеджер зависимостей
         from src.core.dependency_manager import DependencyManager
 
-        # Создаем менеджер
         manager = DependencyManager()
 
         # Проверяем зависимости
@@ -43,7 +39,7 @@ def main():
 
         print("\n" + "-" * 60)
 
-        # Если что-то не установлено, спрашиваем пользователя
+        # Если что-то не установлено, устанавливаем
         if not python_ok or not libreoffice_ok:
             print("\n⚠️  Необходимо установить отсутствующие компоненты:")
 
@@ -57,7 +53,6 @@ def main():
             def progress_callback(current, total, message):
                 show_progress(current, total, message)
 
-            # Устанавливаем всё
             success = manager.install_all(progress_callback)
             print("\n")
 
@@ -65,22 +60,20 @@ def main():
                 print("\n❌ Ошибка при установке зависимостей!")
                 print("\nПопробуйте установить вручную:")
                 print("  pip install -r requirements.txt")
-                print("  brew install --cask libreoffice  # для macOS")
+                if sys.platform == 'darwin':
+                    print("  brew install --cask libreoffice")
+                elif sys.platform == 'win32':
+                    print("  скачайте LibreOffice с https://www.libreoffice.org/")
                 sys.exit(1)
 
             print("\n✅ Все зависимости успешно установлены!")
-            print("\n🔄 Перезапуск приложения...")
-            time.sleep(2)
+            print("\n🚀 Запуск приложения...\n")
 
-            # Перезапускаем приложение
-            import subprocess
-            subprocess.Popen([sys.executable, __file__])
-            sys.exit(0)
+        else:
+            print("\n✅ Все зависимости уже установлены!")
+            print("\n🚀 Запуск приложения...\n")
 
-        print("\n✅ Все зависимости установлены!")
-        print("\n🚀 Запуск приложения...\n")
-
-        # Запускаем основное приложение
+        # Запускаем основное приложение (без перезапуска)
         from src.main import main
         main()
 
