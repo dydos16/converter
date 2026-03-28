@@ -7,6 +7,7 @@ import platform
 import subprocess
 import shutil
 import tarfile
+import time
 from pathlib import Path
 from typing import Optional, Callable
 from loguru import logger
@@ -25,7 +26,8 @@ class LibreOfficeManager:
         self.system = platform.system().lower()
         self.arch = platform.machine().lower()
         self.setup_paths()
-        self.version = "25.8.5"
+        self.version = "26.2.2"
+        self.lang = "ru"
 
     def setup_paths(self):
         """Настраивает пути для хранения LibreOffice"""
@@ -75,7 +77,7 @@ class LibreOfficeManager:
                     logger.info(f"Найден LibreOffice в системе: {self.bin_path}")
                     return True
 
-            # Проверяем распакованную версию в .file-converter (поиск по всем папкам)
+            # Проверяем распакованную версию в .file-converter
             if self.libreoffice_dir.exists():
                 for root, dirs, files in os.walk(self.libreoffice_dir):
                     if 'soffice.exe' in files:
@@ -83,11 +85,24 @@ class LibreOfficeManager:
                         logger.info(f"Найден LibreOffice в .file-converter: {self.bin_path}")
                         return True
         else:
+            # Linux
             import shutil
             soffice = shutil.which('libreoffice') or shutil.which('soffice')
             if soffice:
                 self.bin_path = Path(soffice)
                 return True
+
+            # Проверяем стандартные пути
+            paths = [
+                '/usr/bin/libreoffice',
+                '/usr/bin/soffice',
+                '/usr/local/bin/libreoffice',
+                '/usr/local/bin/soffice',
+            ]
+            for path in paths:
+                if Path(path).exists():
+                    self.bin_path = Path(path)
+                    return True
 
         return False
 
@@ -95,18 +110,26 @@ class LibreOfficeManager:
         """Возвращает список рабочих ссылок для скачивания"""
         if self.system == 'darwin':
             return [
-                f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg",
-                f"https://ftp-osl.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg",
+                f"https://www.libreoffice.org/donate/dl/mac-x86_64/{self.version}/{self.lang}/LibreOffice_{self.version}_MacOS_x86-64.dmg",
+                f"https://downloadarchive.documentfoundation.org/libreoffice/old/{self.version}/mac/x86_64/LibreOffice_{self.version}_MacOS_x86-64.dmg",
             ]
         elif self.system == 'windows':
             return [
-                f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi",
-                f"https://ftp-osl.osuosl.org/pub/libreoffice/libreoffice/stable/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi",
+                f"https://www.libreoffice.org/donate/dl/win-x86_64/{self.version}/{self.lang}/LibreOffice_{self.version}_Win_x86-64.msi",
+                f"https://downloadarchive.documentfoundation.org/libreoffice/old/{self.version}/win/x86_64/LibreOffice_{self.version}_Win_x86-64.msi",
             ]
         else:
+            # Linux — используем официальные donate-ссылки
+            arch = self.arch
+            if arch in ['aarch64', 'arm64']:
+                arch = 'aarch64'
+            else:
+                arch = 'x86_64'
+
             return [
-                f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_deb.tar.gz",
-                f"https://download.documentfoundation.org/libreoffice/stable/{self.version}/linux/x86_64/LibreOffice_{self.version}_Linux_x86-64_rpm.tar.gz",
+                f"https://www.libreoffice.org/donate/dl/deb-{arch}/{self.version}/{self.lang}/LibreOffice_{self.version}_Linux_{arch}_deb.tar.gz",
+                f"https://www.libreoffice.org/donate/dl/rpm-{arch}/{self.version}/{self.lang}/LibreOffice_{self.version}_Linux_{arch}_rpm.tar.gz",
+                f"https://downloadarchive.documentfoundation.org/libreoffice/old/{self.version}/linux/{arch}/LibreOffice_{self.version}_Linux_{arch}_deb.tar.gz",
             ]
 
     def download(self, progress_callback: Optional[Callable] = None) -> bool:
@@ -190,7 +213,6 @@ class LibreOfficeManager:
             if program_dir:
                 # Копируем всю папку, содержащую program
                 if program_dir.name == 'program':
-                    # Копируем родительскую папку
                     parent = program_dir.parent
                     shutil.copytree(parent, self.libreoffice_dir)
                 else:
@@ -203,7 +225,6 @@ class LibreOfficeManager:
             if progress_callback:
                 progress_callback(100)
 
-            # Проверяем, что установка прошла успешно
             return self.is_installed()
 
         except Exception as e:
@@ -295,6 +316,7 @@ class LibreOfficeManager:
 
             shutil.copytree(extracted, self.libreoffice_dir)
 
+            # Делаем исполняемым
             if self.bin_path.exists():
                 self.bin_path.chmod(0o755)
 
@@ -315,6 +337,22 @@ class LibreOfficeManager:
             logger.info("LibreOffice уже установлен")
             return True
 
+        # Для Linux сначала пробуем через apt
+        if self.system == 'linux':
+            logger.info("Пробуем установить LibreOffice через apt...")
+            try:
+                subprocess.run(['sudo', 'apt', 'update'], capture_output=True, check=False)
+                result = subprocess.run(['sudo', 'apt', 'install', '-y', 'libreoffice'], capture_output=True)
+                if result.returncode == 0:
+                    import shutil
+                    soffice = shutil.which('libreoffice') or shutil.which('soffice')
+                    if soffice:
+                        self.bin_path = Path(soffice)
+                    return self.is_installed()
+            except Exception as e:
+                logger.warning(f"Установка через apt не удалась: {e}")
+
+        # Скачиваем и устанавливаем
         if not self.download(progress_callback):
             return False
 
