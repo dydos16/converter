@@ -112,17 +112,18 @@ class DependencyManager:
         return False
 
     def install_libreoffice(self, progress_callback=None) -> bool:
-        """Устанавливает LibreOffice через встроенный менеджер"""
+        """Устанавливает LibreOffice автоматически"""
         from .libreoffice_manager import LibreOfficeManager
 
         manager = LibreOfficeManager()
 
         if manager.is_installed():
+            logger.info("LibreOffice уже установлен")
             return True
 
-        if progress_callback:
-            progress_callback(0, 100, "Скачивание LibreOffice...")
+        logger.info("LibreOffice не найден, начинаем автоматическую установку...")
 
+        # Запускаем установку
         def inner_callback(progress):
             if progress_callback:
                 progress_callback(progress, 100, f"Установка LibreOffice: {progress}%")

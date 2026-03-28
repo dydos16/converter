@@ -33,14 +33,11 @@ def find_pip():
             Path(sys.executable).parent / 'pip.exe',
             Path(sys.executable).parent / 'Scripts' / 'pip.exe',
             Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'pip.exe',
-            Path('C:/Python*/Scripts/pip.exe'),
-            Path('C:/Program Files/Python*/Scripts/pip.exe'),
-            Path('C:/Users/*/AppData/Local/Programs/Python/Python*/Scripts/pip.exe'),
         ]
 
-        # Ищем по маске
+        # Поиск по маске
+        from glob import glob
         for pattern in ['C:/Python*/Scripts/pip.exe', 'C:/Program Files/Python*/Scripts/pip.exe']:
-            from glob import glob
             for path in glob(pattern):
                 if Path(path).exists():
                     return path
@@ -67,7 +64,6 @@ def get_pip_command():
         if pip_cmd:
             return [pip_cmd, 'install', '-r', 'requirements.txt']
         else:
-            # Используем python -m pip
             return [sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt']
     else:
         return ['pip3', 'install', '--break-system-packages', '-r', 'requirements.txt']
@@ -100,25 +96,28 @@ def install_requirements():
         return False
 
 
-def check_and_install():
-    """Проверяет наличие модулей и устанавливает при необходимости"""
-    try:
-        import loguru
-        import PySide6
-        import docx
-        import pptx
-        import reportlab
-        import PIL
-        import openpyxl
-        import requests
-        import colorama
-        import lxml
-        print("✅ Все модули уже установлены")
-        return True
-    except ImportError as e:
-        print(f"⚠️  Отсутствует модуль: {e.name}")
-        print("🔄 Автоматическая установка...")
-        return install_requirements()
+def check_python_packages():
+    """Проверяет наличие всех необходимых Python пакетов"""
+    required = [
+        'loguru', 'PySide6', 'docx', 'pptx', 'reportlab',
+        'PIL', 'openpyxl', 'requests', 'colorama', 'lxml'
+    ]
+
+    missing = []
+    for package in required:
+        try:
+            if package == 'PIL':
+                __import__('PIL')
+            elif package == 'docx':
+                __import__('docx')
+            elif package == 'pptx':
+                __import__('pptx')
+            else:
+                __import__(package)
+        except ImportError:
+            missing.append(package)
+
+    return missing
 
 
 def check_libreoffice():
@@ -146,6 +145,30 @@ def check_libreoffice():
         return shutil.which('libreoffice') is not None or shutil.which('soffice') is not None
 
 
+def install_libreoffice_auto():
+    """Автоматическая установка LibreOffice"""
+    print("\n🔄 Автоматическая установка LibreOffice...")
+
+    try:
+        from src.core.libreoffice_manager import LibreOfficeManager
+
+        manager = LibreOfficeManager()
+
+        def progress_callback(progress):
+            print(f"\r📥 Скачивание и установка: {progress}%", end='', flush=True)
+
+        if manager.install(progress_callback):
+            print("\n✅ LibreOffice успешно установлен!")
+            return True
+        else:
+            print("\n❌ Не удалось установить LibreOffice автоматически")
+            return False
+
+    except Exception as e:
+        print(f"\n❌ Ошибка при установке LibreOffice: {e}")
+        return False
+
+
 def main():
     """Запуск с проверкой зависимостей"""
     print("\n" + "=" * 60)
@@ -156,32 +179,67 @@ def main():
     print(f"🖥️  Операционная система: {os_name}")
     print(f"🐍 Python: {sys.executable}")
 
-    # Проверяем и устанавливаем Python зависимости
-    if not check_and_install():
-        print("\n❌ Ошибка при установке Python зависимостей!")
-        print("\nПопробуйте установить вручную:")
-        if os_name == 'windows':
-            print("  python -m pip install -r requirements.txt")
-        else:
-            print("  pip3 install --break-system-packages -r requirements.txt")
-        sys.exit(1)
+    # Проверяем Python зависимости
+    missing = check_python_packages()
+
+    if missing:
+        print(f"\n⚠️  Отсутствуют Python пакеты: {', '.join(missing)}")
+        print("🔄 Автоматическая установка...")
+
+        if not install_requirements():
+            print("\n❌ Ошибка при установке Python зависимостей!")
+            print("\nПопробуйте установить вручную:")
+            if os_name == 'windows':
+                print("  python -m pip install -r requirements.txt")
+            else:
+                print("  pip3 install --break-system-packages -r requirements.txt")
+            sys.exit(1)
+
+        # Проверяем ещё раз
+        missing = check_python_packages()
+        if missing:
+            print(f"\n❌ После установки всё ещё отсутствуют: {missing}")
+            sys.exit(1)
+    else:
+        print("✅ Все Python пакеты установлены")
 
     # Проверяем LibreOffice
     if not check_libreoffice():
         print("\n⚠️  LibreOffice не найден!")
-        print("📄 LibreOffice нужен для конвертации Word и PowerPoint файлов.")
-        print("\nУстановите LibreOffice:")
-        if os_name == 'macos':
-            print("  brew install --cask libreoffice")
-        elif os_name == 'windows':
-            print("  Скачайте с https://www.libreoffice.org/download/")
-        else:
-            print("  sudo apt install libreoffice")
-        print("\nИли продолжайте без LibreOffice (конвертация будет ограничена).")
 
-        response = input("\nПродолжить без LibreOffice? (y/n): ").lower()
-        if response != 'y':
-            sys.exit(1)
+        # Пробуем установить автоматически
+        if install_libreoffice_auto():
+            # Проверяем после установки
+            if not check_libreoffice():
+                print("\n❌ LibreOffice не установился автоматически")
+                print("\nУстановите вручную:")
+                if os_name == 'macos':
+                    print("  brew install --cask libreoffice")
+                elif os_name == 'windows':
+                    print("  скачайте с https://www.libreoffice.org/download/")
+                else:
+                    print("  sudo apt install libreoffice")
+
+                response = input("\nПродолжить без LibreOffice? (y/n): ").lower()
+                if response != 'y':
+                    sys.exit(1)
+            else:
+                print("✅ LibreOffice успешно установлен!")
+        else:
+            print("\n❌ Не удалось установить LibreOffice автоматически")
+            print("\nУстановите вручную:")
+            if os_name == 'macos':
+                print("  brew install --cask libreoffice")
+            elif os_name == 'windows':
+                print("  скачайте с https://www.libreoffice.org/download/")
+            else:
+                print("  sudo apt install libreoffice")
+
+            response = input("\nПродолжить без LibreOffice? (y/n): ").lower()
+            if response != 'y':
+                sys.exit(1)
+    else:
+        print("✅ LibreOffice найден")
 
     print("\n🚀 Запуск приложения...\n")
 
