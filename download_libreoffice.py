@@ -98,8 +98,66 @@ def extract_archive(archive_path, dest_dir):
 # УСТАНОВКА ДЛЯ РАЗНЫХ ОС
 # ============================================
 
+def install_windows(target_dir):
+    """Windows: автоматическая установка"""
+    print("\n🔧 Настройка LibreOffice для Windows...")
+
+    # Ищем MSI файл в распакованном архиве
+    msi_files = []
+    for root, dirs, files in os.walk(target_dir):
+        for file in files:
+            if file.endswith('.msi'):
+                msi_files.append(Path(root) / file)
+
+    if not msi_files:
+        print("❌ MSI файл не найден")
+        return False
+
+    msi_path = msi_files[0]
+    print(f"📦 Найден MSI: {msi_path}")
+
+    # Папка для распаковки
+    extract_dir = target_dir / "LibreOffice"
+    extract_dir.mkdir(exist_ok=True)
+
+    print("🔧 Распаковка MSI (это может занять несколько минут)...")
+
+    # Распаковываем MSI
+    cmd = ['msiexec', '/a', str(msi_path), '/quiet', f'TARGETDIR={extract_dir}']
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, shell=True, timeout=300)
+
+        if result.returncode == 0:
+            print("✅ MSI распакован успешно")
+
+            # Ищем soffice.exe
+            soffice_path = None
+            for root, dirs, files in os.walk(extract_dir):
+                if 'soffice.exe' in files:
+                    soffice_path = Path(root) / 'soffice.exe'
+                    break
+
+            if soffice_path and soffice_path.exists():
+                print(f"✅ LibreOffice готов: {soffice_path}")
+                return True
+            else:
+                print("⚠️  soffice.exe не найден, но распаковка завершена")
+                return True
+        else:
+            print(f"❌ Ошибка распаковки: {result.stderr}")
+            return False
+
+    except subprocess.TimeoutExpired:
+        print("❌ Превышено время ожидания")
+        return False
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        return False
+
+
 def install_macos(target_dir):
-    """macOS: уже готовый .app, ничего не делаем"""
+    """macOS: уже готовый .app"""
     app_path = target_dir / "LibreOffice.app"
     if app_path.exists():
         print("✅ macOS версия готова")
@@ -107,17 +165,8 @@ def install_macos(target_dir):
     return False
 
 
-def install_windows(target_dir):
-    """Windows: MSI файл, нужно распаковать при первом использовании"""
-    msi_files = list(target_dir.glob("*.msi"))
-    if msi_files:
-        print(f"✅ Windows MSI готов: {msi_files[0].name}")
-        return True
-    return False
-
-
 def install_linux(target_dir):
-    """Linux: устанавливаем DEB-пакеты"""
+    """Linux: установка DEB-пакетов"""
     # Ищем папку с DEBS
     deb_dirs = list(target_dir.glob("*_Linux_x86-64_deb"))
     if not deb_dirs:
@@ -136,31 +185,17 @@ def install_linux(target_dir):
 
     print("📦 Установка DEB-пакетов LibreOffice...")
 
-    # Получаем список всех .deb файлов
     deb_files = list(debs_path.glob("*.deb"))
-    if not deb_files:
-        print("❌ Нет DEB-файлов для установки")
-        return False
-
     print(f"Найдено {len(deb_files)} DEB-пакетов")
 
-    # Устанавливаем пакеты по одному
     try:
         for deb_file in deb_files:
             print(f"  Установка {deb_file.name}...")
-            result = subprocess.run(
-                ['sudo', 'dpkg', '-i', str(deb_file)],
-                capture_output=True,
-                text=True
-            )
-            if result.returncode != 0:
-                print(f"    Ошибка: {result.stderr}")
+            subprocess.run(['sudo', 'dpkg', '-i', str(deb_file)], capture_output=True)
 
-        # Исправляем зависимости
         print("\n🔧 Исправление зависимостей...")
         subprocess.run(['sudo', 'apt', '--fix-broken', 'install', '-y'], capture_output=True)
 
-        # Проверяем, что установилось
         import shutil
         if shutil.which('soffice') or shutil.which('libreoffice'):
             print("✅ LibreOffice успешно установлен")
@@ -174,56 +209,48 @@ def install_linux(target_dir):
         return False
 
 
-def install_system_linux():
-    """Установка LibreOffice через apt (запасной вариант)"""
-    print("📦 Установка LibreOffice через apt...")
-    try:
-        subprocess.run(['sudo', 'apt', 'update'], capture_output=True)
-        result = subprocess.run(['sudo', 'apt', 'install', '-y', 'libreoffice'], capture_output=True)
-        if result.returncode == 0:
-            print("✅ LibreOffice установлен через apt")
-            return True
-        return False
-    except Exception as e:
-        print(f"❌ Ошибка: {e}")
-        return False
-
-
-# ============================================
-# ОСНОВНАЯ ФУНКЦИЯ
-# ============================================
-
 def check_libreoffice_installed():
     """Проверяет, установлен ли LibreOffice в системе"""
     import shutil
 
-    if shutil.which('libreoffice'):
-        return True
-    if shutil.which('soffice'):
-        return True
+    if OS == 'windows':
+        # Проверяем системную установку
+        if Path('C:/Program Files/LibreOffice/program/soffice.exe').exists() or \
+                Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe').exists():
+            return True
 
-    # Для macOS проверяем Applications
-    if OS == 'macos':
+        # Проверяем встроенную в проект
+        project_root = Path(__file__).parent
+        extracted_path = project_root / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe"
+        if extracted_path.exists():
+            return True
+
+        return False
+
+    elif OS == 'macos':
         if Path('/Applications/LibreOffice.app').exists():
             return True
+        project_root = Path(__file__).parent
+        app_path = project_root / "resources" / "libreoffice" / "macos" / "LibreOffice.app"
+        return app_path.exists()
 
-    # Для Windows проверяем Program Files
-    if OS == 'windows':
-        if Path('C:/Program Files/LibreOffice').exists() or \
-                Path('C:/Program Files (x86)/LibreOffice').exists():
+    else:
+        if shutil.which('libreoffice') or shutil.which('soffice'):
             return True
-
-    return False
+        project_root = Path(__file__).parent
+        linux_dir = project_root / "resources" / "libreoffice" / "linux"
+        return linux_dir.exists()
 
 
 def main():
+    """Основная функция"""
     print("\n" + "=" * 60)
     print("  File Converter Pro - Установка LibreOffice")
     print("=" * 60)
 
-    # Сначала проверяем, не установлен ли уже LibreOffice
+    # Проверяем, не установлен ли уже LibreOffice
     if check_libreoffice_installed():
-        print("✅ LibreOffice уже установлен в системе")
+        print("✅ LibreOffice уже установлен")
         return True
 
     project_root = Path(__file__).parent
@@ -233,8 +260,14 @@ def main():
     # Для Linux сначала пробуем установить через apt
     if OS == 'linux':
         print("\n🔄 Пробуем установить через системный менеджер...")
-        if install_system_linux():
-            return True
+        try:
+            subprocess.run(['sudo', 'apt', 'update'], capture_output=True)
+            result = subprocess.run(['sudo', 'apt', 'install', '-y', 'libreoffice'], capture_output=True)
+            if result.returncode == 0:
+                print("✅ LibreOffice установлен через apt")
+                return True
+        except:
+            pass
 
     # Скачиваем архив
     url = get_download_url()
@@ -266,6 +299,13 @@ def main():
         return True
     else:
         print("\n❌ Не удалось установить LibreOffice")
+        print("\nПопробуйте установить вручную:")
+        if OS == 'windows':
+            print("  https://www.libreoffice.org/download/download-libreoffice/")
+        elif OS == 'macos':
+            print("  brew install --cask libreoffice")
+        else:
+            print("  sudo apt install libreoffice")
         return False
 
 
