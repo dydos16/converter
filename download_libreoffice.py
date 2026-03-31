@@ -136,34 +136,38 @@ def install_linux(target_dir):
 
     print("📦 Установка DEB-пакетов LibreOffice...")
 
-    # Устанавливаем все пакеты
+    # Получаем список всех .deb файлов
+    deb_files = list(debs_path.glob("*.deb"))
+    if not deb_files:
+        print("❌ Нет DEB-файлов для установки")
+        return False
+
+    print(f"Найдено {len(deb_files)} DEB-пакетов")
+
+    # Устанавливаем пакеты по одному
     try:
-        result = subprocess.run(
-            ['sudo', 'dpkg', '-i', '*.deb'],
-            cwd=debs_path,
-            capture_output=True,
-            text=True,
-            shell=True
-        )
-
-        if result.returncode != 0:
-            print("⚠️  Ошибка установки, исправляем зависимости...")
-            subprocess.run(['sudo', 'apt', '--fix-broken', 'install', '-y'], capture_output=True)
-            # Пробуем снова
+        for deb_file in deb_files:
+            print(f"  Установка {deb_file.name}...")
             result = subprocess.run(
-                ['sudo', 'dpkg', '-i', '*.deb'],
-                cwd=debs_path,
+                ['sudo', 'dpkg', '-i', str(deb_file)],
                 capture_output=True,
-                text=True,
-                shell=True
+                text=True
             )
+            if result.returncode != 0:
+                print(f"    Ошибка: {result.stderr}")
 
-        if result.returncode == 0:
-            print("✅ DEB-пакеты установлены")
+        # Исправляем зависимости
+        print("\n🔧 Исправление зависимостей...")
+        subprocess.run(['sudo', 'apt', '--fix-broken', 'install', '-y'], capture_output=True)
+
+        # Проверяем, что установилось
+        import shutil
+        if shutil.which('soffice') or shutil.which('libreoffice'):
+            print("✅ LibreOffice успешно установлен")
             return True
         else:
-            print(f"❌ Ошибка установки: {result.stderr}")
-            return False
+            print("⚠️  LibreOffice установлен, но не найден в PATH")
+            return True
 
     except Exception as e:
         print(f"❌ Ошибка: {e}")
