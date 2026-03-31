@@ -24,3 +24,4 @@ venv/
 *.log
 *.tmp
 .DS_Store
+temp_download/
