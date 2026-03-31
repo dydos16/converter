@@ -1,0 +1,26 @@
+# Большие файлы LibreOffice
+resources/libreoffice/linux/*.deb
+resources/libreoffice/linux/*.deb/*
+resources/libreoffice/linux/LibreOffice_*/
+resources/libreoffice/macos/LibreOffice.app/
+resources/libreoffice/macos/*.dylib
+resources/libreoffice/macos/*.app
+resources/libreoffice/windows/*.msi
+resources/libreoffice/windows/*.exe
+resources/libreoffice/windows/LibreOffice/
+
+# Файлы Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Настройки IDE
+.idea/
+.vscode/
+*.iml
+
+# Логи и временные файлы
+*.log
+*.tmp
+.DS_Store
