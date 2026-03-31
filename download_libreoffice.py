@@ -3,18 +3,20 @@
 Скрипт для автоматического скачивания и установки LibreOffice из GitHub Releases
 """
 import sys
+import os
 import platform
 import urllib.request
 import tarfile
 import zipfile
 import shutil
+import subprocess
 from pathlib import Path
 
 # ============================================
 # КОНФИГУРАЦИЯ
 # ============================================
 REPO_OWNER = "MiHoN135"
-REPO_NAME = "Convertator-Releases"  # Публичный репозиторий с релизами
+REPO_NAME = "Convertator-Releases"
 RELEASE_TAG = "v1.0.0"
 
 # Определяем ОС
@@ -26,6 +28,10 @@ elif system == 'windows':
 else:
     OS = 'linux'
 
+
+# ============================================
+# ФУНКЦИИ СКАЧИВАНИЯ
+# ============================================
 
 def download_file(url, dest):
     """Скачивает файл с отображением прогресса"""
@@ -88,35 +94,184 @@ def extract_archive(archive_path, dest_dir):
     print(f"✅ Распаковано в {dest_dir}")
 
 
+# ============================================
+# УСТАНОВКА ДЛЯ РАЗНЫХ ОС
+# ============================================
+
+def install_macos(target_dir):
+    """macOS: уже готовый .app, ничего не делаем"""
+    app_path = target_dir / "LibreOffice.app"
+    if app_path.exists():
+        print("✅ macOS версия готова")
+        return True
+    return False
+
+
+def install_windows(target_dir):
+    """Windows: MSI файл, нужно распаковать при первом использовании"""
+    msi_files = list(target_dir.glob("*.msi"))
+    if msi_files:
+        print(f"✅ Windows MSI готов: {msi_files[0].name}")
+        return True
+    return False
+
+
+def install_linux(target_dir):
+    """Linux: устанавливаем DEB-пакеты"""
+    # Ищем папку с DEBS
+    deb_dirs = list(target_dir.glob("*_Linux_x86-64_deb"))
+    if not deb_dirs:
+        deb_dirs = list(target_dir.glob("LibreOffice_*"))
+
+    if not deb_dirs:
+        print("❌ Не найдена папка с DEB-пакетами")
+        return False
+
+    deb_dir = deb_dirs[0]
+    debs_path = deb_dir / "DEBS"
+
+    if not debs_path.exists():
+        print(f"❌ Папка DEBS не найдена: {debs_path}")
+        return False
+
+    print("📦 Установка DEB-пакетов LibreOffice...")
+
+    # Устанавливаем все пакеты
+    try:
+        result = subprocess.run(
+            ['sudo', 'dpkg', '-i', '*.deb'],
+            cwd=debs_path,
+            capture_output=True,
+            text=True,
+            shell=True
+        )
+
+        if result.returncode != 0:
+            print("⚠️  Ошибка установки, исправляем зависимости...")
+            subprocess.run(['sudo', 'apt', '--fix-broken', 'install', '-y'], capture_output=True)
+            # Пробуем снова
+            result = subprocess.run(
+                ['sudo', 'dpkg', '-i', '*.deb'],
+                cwd=debs_path,
+                capture_output=True,
+                text=True,
+                shell=True
+            )
+
+        if result.returncode == 0:
+            print("✅ DEB-пакеты установлены")
+            return True
+        else:
+            print(f"❌ Ошибка установки: {result.stderr}")
+            return False
+
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        return False
+
+
+def install_system_linux():
+    """Установка LibreOffice через apt (запасной вариант)"""
+    print("📦 Установка LibreOffice через apt...")
+    try:
+        subprocess.run(['sudo', 'apt', 'update'], capture_output=True)
+        result = subprocess.run(['sudo', 'apt', 'install', '-y', 'libreoffice'], capture_output=True)
+        if result.returncode == 0:
+            print("✅ LibreOffice установлен через apt")
+            return True
+        return False
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
+        return False
+
+
+# ============================================
+# ОСНОВНАЯ ФУНКЦИЯ
+# ============================================
+
+def check_libreoffice_installed():
+    """Проверяет, установлен ли LibreOffice в системе"""
+    import shutil
+
+    if shutil.which('libreoffice'):
+        return True
+    if shutil.which('soffice'):
+        return True
+
+    # Для macOS проверяем Applications
+    if OS == 'macos':
+        if Path('/Applications/LibreOffice.app').exists():
+            return True
+
+    # Для Windows проверяем Program Files
+    if OS == 'windows':
+        if Path('C:/Program Files/LibreOffice').exists() or \
+                Path('C:/Program Files (x86)/LibreOffice').exists():
+            return True
+
+    return False
+
+
 def main():
     print("\n" + "=" * 60)
     print("  File Converter Pro - Установка LibreOffice")
     print("=" * 60)
 
+    # Сначала проверяем, не установлен ли уже LibreOffice
+    if check_libreoffice_installed():
+        print("✅ LibreOffice уже установлен в системе")
+        return True
+
     project_root = Path(__file__).parent
     target = get_target_path(project_root)
     target.mkdir(parents=True, exist_ok=True)
 
-    url = get_download_url()
-    print(f"🔗 URL: {url}")
+    # Для Linux сначала пробуем установить через apt
+    if OS == 'linux':
+        print("\n🔄 Пробуем установить через системный менеджер...")
+        if install_system_linux():
+            return True
 
-    # Скачиваем
+    # Скачиваем архив
+    url = get_download_url()
+    print(f"\n🔗 URL: {url}")
+
     archive_path = project_root / "temp_download" / url.split('/')[-1]
     archive_path.parent.mkdir(exist_ok=True)
 
     if not download_file(url, archive_path):
-        print("❌ Не удалось скачать")
+        print("❌ Не удалось скачать архив")
         return False
 
     # Распаковываем
     extract_archive(archive_path, target)
 
-    # Очищаем
+    # Устанавливаем в зависимости от ОС
+    if OS == 'macos':
+        success = install_macos(target)
+    elif OS == 'windows':
+        success = install_windows(target)
+    else:
+        success = install_linux(target)
+
+    # Очищаем временную папку
     shutil.rmtree(archive_path.parent, ignore_errors=True)
 
-    print("\n✅ LibreOffice успешно установлен!")
-    return True
+    if success:
+        print("\n✅ LibreOffice успешно установлен!")
+        return True
+    else:
+        print("\n❌ Не удалось установить LibreOffice")
+        return False
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        success = main()
+        sys.exit(0 if success else 1)
+    except KeyboardInterrupt:
+        print("\n\n❌ Установка прервана пользователем")
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n❌ Ошибка: {e}")
+        sys.exit(1)
