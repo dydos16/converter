@@ -41,6 +41,15 @@ SUPPORTED_CONVERSIONS = {
     ('tiff', 'png'): 'ImageConverter',
     ('tiff', 'jpg'): 'ImageConverter',
     ('tiff', 'webp'): 'ImageConverter',
+
+    # PDF конвертации
+    ('pdf', 'docx'): 'PdfToDocxConverter',
+    ('pdf', 'txt'): 'PdfToTextConverter',
+    ('pdf', 'png'): 'PdfToImageConverter',
+    ('pdf', 'jpg'): 'PdfToImageConverter',
+    ('pdf', 'jpeg'): 'PdfToImageConverter',
+    ('pdf', 'webp'): 'PdfToImageConverter',
+    ('pdf', 'pdf'): 'PdfConverter',  # Для обработки/оптимизации PDF
 }
 
 # Все поддерживаемые входные форматы
@@ -68,6 +77,12 @@ FORMAT_GROUPS = {
         'input_formats': ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tiff'],
         'output_formats': ['png', 'jpg', 'jpeg', 'webp', 'bmp'],
         'icon': '🖼️'
+    },
+    'pdf': {
+        'name': 'PDF документы',
+        'input_formats': ['pdf'],
+        'output_formats': ['docx', 'txt', 'png', 'jpg', 'jpeg', 'webp'],
+        'icon': '📑'
     }
 }
 
@@ -87,8 +102,8 @@ FILE_TYPE_INFO = {
     'bmp': {'name': 'BMP Image', 'icon': '🖼️'},
     'gif': {'name': 'GIF Image', 'icon': '🖼️'},
     'tiff': {'name': 'TIFF Image', 'icon': '🖼️'},
+    'txt': {'name': 'Text File', 'icon': '📝'},
 }
-
 
 def get_output_formats_for_input(input_format: str) -> list:
     """Возвращает возможные выходные форматы для входного"""
@@ -97,7 +112,6 @@ def get_output_formats_for_input(input_format: str) -> list:
         if in_fmt == input_format
     ])
 
-
 def get_input_formats_for_output(output_format: str) -> list:
     """Возвращает возможные входные форматы для выходного"""
     return sorted([
@@ -105,11 +119,9 @@ def get_input_formats_for_output(output_format: str) -> list:
         if out_fmt == output_format
     ])
 
-
 def can_convert(input_format: str, output_format: str) -> bool:
     """Проверяет, возможна ли конвертация"""
     return (input_format, output_format) in SUPPORTED_CONVERSIONS
-
 
 def get_converter_class(input_format: str, output_format: str) -> str:
     """Возвращает имя класса конвертера для указанных форматов"""
