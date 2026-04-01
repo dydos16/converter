@@ -12,7 +12,7 @@ class Settings:
 
     DEFAULT_SETTINGS = {
         'theme': 'dark',
-        'max_concurrent_jobs': 3,
+        'max_concurrent_jobs': 4,
         'image_quality': 85,
         'image_max_width': None,
         'image_max_height': None,

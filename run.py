@@ -24,35 +24,42 @@ def get_os():
         return 'linux'
 
 
-def run_command(cmd, description):
+def get_arch():
+    """Определяет архитектуру процессора"""
+    machine = platform.machine().lower()
+    if machine in ['arm64', 'aarch64']:
+        return 'arm64'
+    else:
+        return 'x86_64'
+
+
+def run_command(cmd, description, show_output=True):
     """Выполняет команду и выводит прогресс"""
     print(f"\n📦 {description}...")
     print(f"   Команда: {' '.join(cmd)}")
 
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
+        if show_output:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
 
-        for line in process.stdout:
-            if 'Downloading' in line or 'Collecting' in line:
-                print(f"   {line.strip()}")
-            elif 'Successfully installed' in line:
-                print(f"   ✅ {line.strip()}")
+            for line in process.stdout:
+                if 'Downloading' in line or 'Collecting' in line:
+                    print(f"   {line.strip()}")
+                elif 'Successfully installed' in line:
+                    print(f"   ✅ {line.strip()}")
 
-        process.wait()
-
-        if process.returncode == 0:
-            print(f"   ✅ {description} завершена")
-            return True
+            process.wait()
+            return process.returncode == 0
         else:
-            print(f"   ❌ Ошибка {description}")
-            return False
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            return result.returncode == 0
 
     except Exception as e:
         print(f"   ❌ Ошибка: {e}")
@@ -64,9 +71,8 @@ def install_pip():
     os_name = get_os()
 
     if os_name == 'windows':
-        return True  # На Windows pip обычно уже есть
+        return True
 
-    # Проверяем, есть ли pip
     if shutil.which('pip') or shutil.which('pip3'):
         return True
 
@@ -82,13 +88,11 @@ def install_requirements():
     """Устанавливает зависимости из requirements.txt"""
     os_name = get_os()
 
-    # Проверяем, существует ли requirements.txt
     req_file = Path(__file__).parent / "requirements.txt"
     if not req_file.exists():
         print("\n⚠️  requirements.txt не найден!")
         return False
 
-    # Формируем команду
     if os_name == 'windows':
         cmd = [sys.executable, '-m', 'pip', 'install', '-r', 'requirements.txt']
     else:
@@ -122,40 +126,37 @@ def check_python_packages():
 
 
 def check_libreoffice_installed():
-    """Проверяет, установлен ли LibreOffice"""
+    """Проверяет, установлен ли LibreOffice и работает ли"""
+    project_root = Path(__file__).parent
     os_name = get_os()
 
     if os_name == 'macos':
-        # Проверяем встроенный в проект
-        app_path = Path(__file__).parent / "resources" / "libreoffice" / "macos" / "LibreOffice.app"
+        app_path = project_root / "resources" / "libreoffice" / "macos" / "LibreOffice.app"
         if app_path.exists():
-            return True
-        # Проверяем системный
-        if Path('/Applications/LibreOffice.app').exists():
-            return True
-
-    elif os_name == 'windows':
-        # Проверяем системную установку
-        if Path('C:/Program Files/LibreOffice/program/soffice.exe').exists() or \
-                Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe').exists():
-            return True
-        # Проверяем встроенную в проект распакованную версию
-        extracted_path = Path(
-            __file__).parent / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe"
-        if extracted_path.exists():
-            return True
+            soffice = app_path / "Contents" / "MacOS" / "soffice"
+            if soffice.exists():
+                try:
+                    result = subprocess.run([str(soffice), '--version'],
+                                            capture_output=True, timeout=5)
+                    return result.returncode == 0
+                except:
+                    pass
         return False
 
+    elif os_name == 'windows':
+        msi_path = project_root / "resources" / "libreoffice" / "windows" / "LibreOffice_26.2.2_Win_x86-64.msi"
+        if msi_path.exists():
+            return True
+        # Проверяем распакованную версию
+        extracted = project_root / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe"
+        return extracted.exists()
+
     else:  # linux
-        # Проверяем системный
+        import shutil
         if shutil.which('libreoffice') or shutil.which('soffice'):
             return True
-        # Проверяем встроенный
-        linux_dir = Path(__file__).parent / "resources" / "libreoffice" / "linux"
-        if linux_dir.exists():
-            return True
-
-    return False
+        linux_dir = project_root / "resources" / "libreoffice" / "linux"
+        return linux_dir.exists()
 
 
 def install_libreoffice():
@@ -164,30 +165,25 @@ def install_libreoffice():
     print("  Установка LibreOffice...")
     print("=" * 60)
 
-    # Проверяем, есть ли скрипт
     script_path = Path(__file__).parent / "download_libreoffice.py"
     if not script_path.exists():
         print("❌ Скрипт download_libreoffice.py не найден")
         return False
 
     try:
-        # Импортируем и запускаем скрипт установки
-        sys.path.insert(0, str(Path(__file__).parent))
-        from download_libreoffice import main as download_main
-        success = download_main()
+        # Запускаем скрипт установки
+        result = subprocess.run([sys.executable, str(script_path)],
+                                capture_output=True, text=True)
 
-        if success:
+        if result.returncode == 0:
             print("\n✅ LibreOffice успешно установлен!")
             return True
         else:
-            print("\n❌ Не удалось установить LibreOffice")
+            print(f"\n❌ Ошибка установки: {result.stderr}")
             return False
 
-    except ImportError as e:
-        print(f"❌ Ошибка импорта: {e}")
-        return False
     except Exception as e:
-        print(f"❌ Ошибка при установке: {e}")
+        print(f"❌ Ошибка: {e}")
         return False
 
 
@@ -198,7 +194,9 @@ def main():
     print("=" * 60)
 
     os_name = get_os()
+    arch = get_arch()
     print(f"\n🖥️  Операционная система: {os_name}")
+    print(f"📐 Архитектура: {arch}")
     print(f"🐍 Python: {sys.executable}")
 
     # 1. Устанавливаем pip если нужно
@@ -240,10 +238,11 @@ def main():
         print("\n⚠️  LibreOffice не найден!")
 
         if not install_libreoffice():
-            print("\n❌ Не удалось установить LibreOffice автоматически")
+            print("\n❌ Не удалось установить LibreOffice")
             print("\nУстановите вручную:")
             if os_name == 'macos':
                 print("  brew install --cask libreoffice")
+                print("  или скачайте с https://www.libreoffice.org/download/")
             elif os_name == 'windows':
                 print("  скачайте с https://www.libreoffice.org/download/")
             else:
@@ -253,7 +252,7 @@ def main():
             if response != 'y':
                 sys.exit(1)
     else:
-        print("\n✅ LibreOffice найден")
+        print("\n✅ LibreOffice найден и работает")
 
     # 5. Запускаем основное приложение
     print("\n" + "=" * 60)
