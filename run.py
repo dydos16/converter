@@ -7,6 +7,7 @@ import os
 import platform
 import subprocess
 import shutil
+import importlib.util
 from pathlib import Path
 
 # Добавляем текущую директорию в путь
@@ -130,7 +131,36 @@ def check_libreoffice_installed():
     project_root = Path(__file__).parent
     os_name = get_os()
 
-    if os_name == 'macos':
+    # Проверяем системную установку
+    if os_name == 'windows':
+        if Path('C:/Program Files/LibreOffice/program/soffice.exe').exists() or \
+                Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe').exists():
+            return True
+    elif os_name == 'macos':
+        if Path('/Applications/LibreOffice.app').exists():
+            return True
+    else:  # linux
+        if shutil.which('libreoffice') or shutil.which('soffice'):
+            return True
+
+    # Проверяем встроенную в проект версию
+    if os_name == 'windows':
+        # Проверяем распакованную версию
+        extracted = project_root / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe"
+        if extracted.exists():
+            return True
+
+        # Проверяем MSI файл
+        msi_files = list((project_root / "resources" / "libreoffice" / "windows").glob("*.msi"))
+        if msi_files:
+            return True
+
+        # Проверяем любую версию в resources
+        for root, dirs, files in os.walk(project_root / "resources"):
+            if 'soffice.exe' in files:
+                return True
+
+    elif os_name == 'macos':
         app_path = project_root / "resources" / "libreoffice" / "macos" / "LibreOffice.app"
         if app_path.exists():
             soffice = app_path / "Contents" / "MacOS" / "soffice"
@@ -141,39 +171,53 @@ def check_libreoffice_installed():
                     return result.returncode == 0
                 except:
                     pass
-        return False
-
-    elif os_name == 'windows':
-        msi_path = project_root / "resources" / "libreoffice" / "windows" / "LibreOffice_26.2.2_Win_x86-64.msi"
-        if msi_path.exists():
-            return True
-        # Проверяем распакованную версию
-        extracted = project_root / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe"
-        return extracted.exists()
-
     else:  # linux
-        import shutil
-        if shutil.which('libreoffice') or shutil.which('soffice'):
-            return True
         linux_dir = project_root / "resources" / "libreoffice" / "linux"
-        return linux_dir.exists()
+        if linux_dir.exists():
+            return True
+
+    return False
 
 
-def install_libreoffice():
-    """Устанавливает LibreOffice через скрипт"""
-    print("\n" + "=" * 60)
-    print("  Установка LibreOffice...")
-    print("=" * 60)
-
+def install_libreoffice_via_script():
+    """Устанавливает LibreOffice через скрипт download_libreoffice.py"""
     script_path = Path(__file__).parent / "download_libreoffice.py"
+
     if not script_path.exists():
         print("❌ Скрипт download_libreoffice.py не найден")
         return False
 
     try:
-        # Запускаем скрипт установки
+        # Используем importlib для импорта и запуска
+        spec = importlib.util.spec_from_file_location("download_libreoffice", script_path)
+        download_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(download_module)
+
+        # Запускаем main из скрипта
+        success = download_module.main()
+        return success
+
+    except ImportError as e:
+        print(f"❌ Ошибка импорта: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ Ошибка при установке: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def install_libreoffice_via_subprocess():
+    """Устанавливает LibreOffice через subprocess (альтернативный способ)"""
+    script_path = Path(__file__).parent / "download_libreoffice.py"
+
+    if not script_path.exists():
+        print("❌ Скрипт download_libreoffice.py не найден")
+        return False
+
+    try:
         result = subprocess.run([sys.executable, str(script_path)],
-                                capture_output=True, text=True)
+                                capture_output=True, text=True, timeout=600)
 
         if result.returncode == 0:
             print("\n✅ LibreOffice успешно установлен!")
@@ -182,9 +226,83 @@ def install_libreoffice():
             print(f"\n❌ Ошибка установки: {result.stderr}")
             return False
 
-    except Exception as e:
-        print(f"❌ Ошибка: {e}")
+    except subprocess.TimeoutExpired:
+        print("\n❌ Превышено время ожидания установки")
         return False
+    except Exception as e:
+        print(f"\n❌ Ошибка: {e}")
+        return False
+
+
+def install_libreoffice():
+    """Устанавливает LibreOffice (основная функция)"""
+    print("\n" + "=" * 60)
+    print("  Установка LibreOffice...")
+    print("=" * 60)
+
+    # Пробуем установить через скрипт
+    print("\n🔄 Запуск установщика LibreOffice...")
+
+    # Сначала пробуем через importlib
+    success = install_libreoffice_via_script()
+
+    # Если не получилось, пробуем через subprocess
+    if not success:
+        print("\n🔄 Пробуем альтернативный способ установки...")
+        success = install_libreoffice_via_subprocess()
+
+    return success
+
+
+def show_manual_instructions():
+    """Показывает инструкции для ручной установки"""
+    os_name = get_os()
+
+    print("\n" + "=" * 60)
+    print("  Инструкция по ручной установке")
+    print("=" * 60)
+
+    if os_name == 'windows':
+        print("""
+📥 Установите LibreOffice вручную:
+
+1. Скачайте установщик с официального сайта:
+   https://www.libreoffice.org/download/download-libreoffice/
+
+2. Запустите скачанный файл и следуйте инструкциям
+
+3. После установки перезапустите приложение
+
+Или используйте winget (если установлен):
+   winget install LibreOffice.LibreOffice
+""")
+    elif os_name == 'macos':
+        print("""
+📥 Установите LibreOffice вручную:
+
+1. Через Homebrew (рекомендуется):
+   brew install --cask libreoffice
+
+2. Или скачайте с официального сайта:
+   https://www.libreoffice.org/download/download-libreoffice/
+
+3. После установки перезапустите приложение
+""")
+    else:
+        print("""
+📥 Установите LibreOffice вручную:
+
+Ubuntu/Debian:
+   sudo apt update && sudo apt install -y libreoffice
+
+Fedora/RHEL:
+   sudo dnf install libreoffice
+
+Arch Linux:
+   sudo pacman -S libreoffice-fresh
+
+После установки перезапустите приложение
+""")
 
 
 def main():
@@ -237,20 +355,19 @@ def main():
     if not check_libreoffice_installed():
         print("\n⚠️  LibreOffice не найден!")
 
-        if not install_libreoffice():
-            print("\n❌ Не удалось установить LibreOffice")
-            print("\nУстановите вручную:")
-            if os_name == 'macos':
-                print("  brew install --cask libreoffice")
-                print("  или скачайте с https://www.libreoffice.org/download/")
-            elif os_name == 'windows':
-                print("  скачайте с https://www.libreoffice.org/download/")
-            else:
-                print("  sudo apt install libreoffice")
+        response = input("\nУстановить LibreOffice автоматически? (y/n): ").lower()
+        if response == 'y':
+            if not install_libreoffice():
+                print("\n❌ Не удалось установить LibreOffice автоматически")
+                show_manual_instructions()
 
-            response = input("\nПродолжить без LibreOffice? (y/n): ").lower()
-            if response != 'y':
-                sys.exit(1)
+                response = input("\nПродолжить без LibreOffice? (y/n): ").lower()
+                if response != 'y':
+                    sys.exit(1)
+            else:
+                print("\n✅ LibreOffice успешно установлен!")
+        else:
+            print("\nПродолжаем без LibreOffice (конвертация документов будет недоступна)")
     else:
         print("\n✅ LibreOffice найден и работает")
 
@@ -260,8 +377,22 @@ def main():
     print("=" * 60 + "\n")
 
     try:
-        from src.main import main
-        main()
+        from src.main import main as app_main
+        app_main()
+    except ImportError as e:
+        print(f"\n❌ Ошибка импорта: {e}")
+        print("\nПроверьте структуру проекта. Должна быть папка src с файлом main.py")
+        print("Ожидаемая структура:")
+        print("  Convertator/")
+        print("  ├── run.py")
+        print("  ├── download_libreoffice.py")
+        print("  ├── requirements.txt")
+        print("  └── src/")
+        print("      ├── main.py")
+        print("      ├── gui/")
+        print("      ├── converters/")
+        print("      └── ...")
+        sys.exit(1)
     except Exception as e:
         print(f"\n❌ Ошибка запуска: {e}")
         import traceback
