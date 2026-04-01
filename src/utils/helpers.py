@@ -9,8 +9,22 @@ from pathlib import Path
 from typing import Optional
 import subprocess
 from loguru import logger
+from src.config.formats import FILE_TYPE_INFO
 
 
+def get_file_icon(extension: str) -> str:
+    """Возвращает эмодзи для типа файла"""
+    ext = extension.lower().lstrip('.')
+    return FILE_TYPE_INFO.get(ext, {}).get('icon', '📁')
+
+
+def get_file_type_name(extension: str) -> str:
+    """Возвращает название типа файла"""
+    ext = extension.lower().lstrip('.')
+    return FILE_TYPE_INFO.get(ext, {}).get('name', 'Неизвестный формат')
+
+
+# Остальные функции helpers.py остаются без изменений
 def create_temp_dir() -> Path:
     """Создает временную директорию"""
     temp_dir = Path(tempfile.mkdtemp(prefix='converter_'))
@@ -93,26 +107,3 @@ def validate_file(file_path: Path, allowed_extensions: list[str]) -> tuple[bool,
         pass
 
     return True, "OK"
-
-
-def get_file_icon(extension: str) -> str:
-    """Возвращает эмодзи для типа файла"""
-    icons = {
-        'pdf': '📄',
-        'docx': '📝',
-        'doc': '📝',
-        'txt': '📃',
-        'jpg': '🖼️',
-        'jpeg': '🖼️',
-        'png': '🖼️',
-        'gif': '🖼️',
-        'webp': '🖼️',
-        'bmp': '🖼️',
-        'xlsx': '📊',
-        'xls': '📊',
-        'csv': '📊',
-        'zip': '📦',
-        'rar': '📦',
-    }
-
-    return icons.get(extension.lower(), '📁')
