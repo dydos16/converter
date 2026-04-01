@@ -49,7 +49,10 @@ SUPPORTED_CONVERSIONS = {
     ('pdf', 'jpg'): 'PdfToImageConverter',
     ('pdf', 'jpeg'): 'PdfToImageConverter',
     ('pdf', 'webp'): 'PdfToImageConverter',
-    ('pdf', 'pdf'): 'PdfConverter',  # Для обработки/оптимизации PDF
+    ('pdf', 'pptx'): 'PdfToPptxConverter',
+    ('pdf', 'ppt'): 'PdfToPptxConverter',
+    ('pdf', 'odp'): 'PdfToPptxConverter',
+    ('pdf', 'pdf'): 'PdfConverter',
 }
 
 # Все поддерживаемые входные форматы
@@ -81,7 +84,7 @@ FORMAT_GROUPS = {
     'pdf': {
         'name': 'PDF документы',
         'input_formats': ['pdf'],
-        'output_formats': ['docx', 'txt', 'png', 'jpg', 'jpeg', 'webp'],
+        'output_formats': ['docx', 'txt', 'png', 'jpg', 'jpeg', 'webp', 'pptx', 'ppt', 'odp'],
         'icon': '📑'
     }
 }
@@ -103,6 +106,7 @@ FILE_TYPE_INFO = {
     'gif': {'name': 'GIF Image', 'icon': '🖼️'},
     'tiff': {'name': 'TIFF Image', 'icon': '🖼️'},
     'txt': {'name': 'Text File', 'icon': '📝'},
+    'odp': {'name': 'OpenDocument Presentation', 'icon': '📊'},
 }
 
 def get_output_formats_for_input(input_format: str) -> list:

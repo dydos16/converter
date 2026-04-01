@@ -7,10 +7,7 @@ from .base import BaseConverter
 from .docx_to_pdf import DocxToPdfConverter
 from .pptx_to_pdf import PptxToPdfConverter
 from .image_converter import ImageConverter
-from .pdf_to_docx import PdfToDocxConverter
-from .pdf_to_text import PdfToTextConverter
-from .pdf_to_image import PdfToImageConverter
-from .pdf_converter import PdfConverter
+from .pdf_to_pptx import PdfToPptxConverter
 from src.config.formats import (
     SUPPORTED_CONVERSIONS,
     ALL_INPUT_FORMATS,
@@ -55,31 +52,8 @@ class ConverterFactory:
                     kwargs.get('max_height')
                 )
             return converter
-        elif converter_class == 'PdfToDocxConverter':
-            converter = PdfToDocxConverter()
-            if 'extract_text_only' in kwargs:
-                converter.set_extract_text_only(kwargs['extract_text_only'])
-            return converter
-        elif converter_class == 'PdfToTextConverter':
-            return PdfToTextConverter()
-        elif converter_class == 'PdfToImageConverter':
-            converter = PdfToImageConverter()
-            if 'quality' in kwargs:
-                converter.set_quality(kwargs['quality'])
-            if 'dpi' in kwargs:
-                converter.set_dpi(kwargs['dpi'])
-            if 'page_range' in kwargs:
-                converter.set_page_range(kwargs['page_range'])
-            return converter
-        elif converter_class == 'PdfConverter':
-            converter = PdfConverter()
-            if 'compress_level' in kwargs:
-                converter.set_compress_level(kwargs['compress_level'])
-            if 'remove_metadata' in kwargs:
-                converter.set_remove_metadata(kwargs['remove_metadata'])
-            if 'linearize' in kwargs:
-                converter.set_linearize(kwargs['linearize'])
-            return converter
+        elif converter_class == 'PdfToPptxConverter':
+            return PdfToPptxConverter()
         
         logger.error(f"Неизвестный конвертер: {converter_class}")
         return None
