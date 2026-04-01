@@ -5,7 +5,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Callable, List
+from typing import Optional, Callable, List, Dict, Any
 from threading import Thread, Lock, Event
 from queue import Queue
 import uuid
@@ -37,6 +37,7 @@ class ConversionJob:
     created_at: datetime = field(default_factory=datetime.now)
     completed_at: Optional[datetime] = None
     converter: Optional[object] = None
+    kwargs: Dict[str, Any] = field(default_factory=dict)  # Дополнительные параметры
 
     def update_progress(self, progress: int):
         """Обновляет прогресс задачи"""
@@ -59,6 +60,21 @@ class ConversionJob:
         self.status = JobStatus.CANCELLED
         self.completed_at = datetime.now()
 
+    def to_dict(self) -> dict:
+        """Преобразует задачу в словарь"""
+        return {
+            'id': self.id,
+            'input_path': str(self.input_path),
+            'output_path': str(self.output_path),
+            'input_format': self.input_format,
+            'output_format': self.output_format,
+            'status': self.status.value,
+            'progress': self.progress,
+            'error_message': self.error_message,
+            'created_at': self.created_at.isoformat(),
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None
+        }
+
 
 class JobManager:
     """Менеджер очереди задач"""
@@ -77,12 +93,13 @@ class JobManager:
             'on_job_completed': [],
             'on_job_failed': []
         }
+        self._job_counters = {'pending': 0, 'processing': 0, 'completed': 0, 'failed': 0, 'cancelled': 0}
 
     def start(self):
         """Запускает обработку очереди"""
         if not self.worker_thread or not self.worker_thread.is_alive():
             self.stop_event.clear()
-            self.worker_thread = Thread(target=self._process_queue, daemon=True)
+            self.worker_thread = Thread(target=self._process_queue, daemon=True, name="JobManagerWorker")
             self.worker_thread.start()
             logger.info("JobManager запущен")
 
@@ -94,9 +111,16 @@ class JobManager:
         logger.info("JobManager остановлен")
 
     def add_job(self, input_path: Path, output_path: Path,
-                input_format: str, output_format: str) -> str:
+                input_format: str, output_format: str, **kwargs) -> str:
         """
         Добавляет новую задачу в очередь
+
+        Args:
+            input_path: Путь к входному файлу
+            output_path: Путь к выходному файлу
+            input_format: Входной формат
+            output_format: Выходной формат
+            **kwargs: Дополнительные параметры для конвертера
 
         Returns:
             str: ID задачи
@@ -108,14 +132,16 @@ class JobManager:
             input_path=input_path,
             output_path=output_path,
             input_format=input_format,
-            output_format=output_format
+            output_format=output_format,
+            kwargs=kwargs
         )
 
         with self.lock:
             self.jobs[job_id] = job
             self.queue.put(job)
+            self._job_counters['pending'] += 1
 
-        logger.info(f"Добавлена задача {job_id}: {input_path} -> {output_path}")
+        logger.info(f"Добавлена задача {job_id}: {input_path.name} -> {output_path.name}")
         return job_id
 
     def cancel_job(self, job_id: str) -> bool:
@@ -124,6 +150,8 @@ class JobManager:
             job = self.jobs.get(job_id)
             if job and job.status == JobStatus.PENDING:
                 job.mark_cancelled()
+                self._job_counters['pending'] -= 1
+                self._job_counters['cancelled'] += 1
                 logger.info(f"Задача {job_id} отменена")
                 return True
             elif job and job.status == JobStatus.PROCESSING:
@@ -136,14 +164,50 @@ class JobManager:
         job = self.jobs.get(job_id)
         return job.status if job else None
 
+    def get_job(self, job_id: str) -> Optional[ConversionJob]:
+        """Возвращает задачу по ID"""
+        return self.jobs.get(job_id)
+
     def get_all_jobs(self) -> List[ConversionJob]:
         """Возвращает все задачи"""
         with self.lock:
             return list(self.jobs.values())
 
+    def get_jobs_by_status(self, status: JobStatus) -> List[ConversionJob]:
+        """Возвращает задачи с определенным статусом"""
+        with self.lock:
+            return [job for job in self.jobs.values() if job.status == status]
+
     def get_active_jobs_count(self) -> int:
         """Возвращает количество активных задач"""
         return len(self.active_jobs)
+
+    def get_statistics(self) -> dict:
+        """Возвращает статистику по задачам"""
+        with self.lock:
+            return {
+                'pending': self._job_counters['pending'],
+                'processing': self._job_counters['processing'],
+                'completed': self._job_counters['completed'],
+                'failed': self._job_counters['failed'],
+                'cancelled': self._job_counters['cancelled'],
+                'total': len(self.jobs),
+                'active': len(self.active_jobs),
+                'max_concurrent': self.max_concurrent
+            }
+
+    def clear_completed_jobs(self):
+        """Очищает завершенные задачи"""
+        with self.lock:
+            to_remove = []
+            for job_id, job in self.jobs.items():
+                if job.status in [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]:
+                    to_remove.append(job_id)
+
+            for job_id in to_remove:
+                del self.jobs[job_id]
+
+            logger.info(f"Очищено {len(to_remove)} завершенных задач")
 
     def _process_queue(self):
         """Основной цикл обработки очереди"""
@@ -167,11 +231,13 @@ class JobManager:
                     continue
 
                 # Запускаем задачу в отдельном потоке
-                thread = Thread(target=self._process_job, args=(job,))
+                thread = Thread(target=self._process_job, args=(job,), daemon=True)
                 thread.daemon = True
 
                 with self.lock:
                     self.active_jobs[job.id] = thread
+                    self._job_counters['pending'] -= 1
+                    self._job_counters['processing'] += 1
 
                 thread.start()
 
@@ -188,10 +254,11 @@ class JobManager:
             job.status = JobStatus.PROCESSING
             self._trigger_callback('on_job_started', job)
 
-            # Создаем конвертер
+            # Создаем конвертер с передачей дополнительных параметров
             converter = ConverterFactory.get_converter(
                 job.input_format,
-                job.output_format
+                job.output_format,
+                **job.kwargs
             )
 
             if not converter:
@@ -199,8 +266,8 @@ class JobManager:
 
             # Устанавливаем коллбеки
             converter.progress_callback = lambda p: self._update_job_progress(job.id, p)
-            converter.status_callback = lambda s: logger.info(f"Job {job.id}: {s}")
-            converter.error_callback = lambda e: logger.error(f"Job {job.id}: {e}")
+            converter.status_callback = lambda s: logger.debug(f"Job {job.id}: {s}")
+            converter.error_callback = lambda e: self._update_job_error(job.id, e)
 
             job.converter = converter
 
@@ -209,15 +276,24 @@ class JobManager:
 
             if success:
                 job.mark_completed()
+                with self.lock:
+                    self._job_counters['processing'] -= 1
+                    self._job_counters['completed'] += 1
                 self._trigger_callback('on_job_completed', job)
                 logger.success(f"Задача {job.id} успешно выполнена")
             else:
                 job.mark_failed("Конвертация не удалась")
+                with self.lock:
+                    self._job_counters['processing'] -= 1
+                    self._job_counters['failed'] += 1
                 self._trigger_callback('on_job_failed', job)
                 logger.error(f"Задача {job.id} провалилась")
 
         except Exception as e:
             job.mark_failed(str(e))
+            with self.lock:
+                self._job_counters['processing'] -= 1
+                self._job_counters['failed'] += 1
             self._trigger_callback('on_job_failed', job)
             logger.exception(f"Ошибка при выполнении задачи {job.id}: {e}")
 
@@ -234,10 +310,24 @@ class JobManager:
                 job.update_progress(progress)
                 self._trigger_callback('on_job_progress', job)
 
+    def _update_job_error(self, job_id: str, error: str):
+        """Обновляет ошибку задачи"""
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if job:
+                job.error_message = error
+
     def register_callback(self, event: str, callback: Callable):
         """Регистрирует callback для события"""
         if event in self.callbacks:
             self.callbacks[event].append(callback)
+            logger.debug(f"Зарегистрирован callback для события {event}")
+
+    def unregister_callback(self, event: str, callback: Callable):
+        """Удаляет callback для события"""
+        if event in self.callbacks and callback in self.callbacks[event]:
+            self.callbacks[event].remove(callback)
+            logger.debug(f"Удален callback для события {event}")
 
     def _trigger_callback(self, event: str, job: ConversionJob):
         """Вызывает все callback'и для события"""
@@ -246,3 +336,31 @@ class JobManager:
                 callback(job)
             except Exception as e:
                 logger.error(f"Ошибка в callback {event}: {e}")
+
+    def get_queue_size(self) -> int:
+        """Возвращает размер очереди"""
+        return self.queue.qsize()
+
+    def is_running(self) -> bool:
+        """Проверяет, запущен ли менеджер"""
+        return self.worker_thread is not None and self.worker_thread.is_alive()
+
+    def wait_for_completion(self, timeout: Optional[float] = None):
+        """Ожидает завершения всех задач"""
+        start_time = datetime.now()
+        while True:
+            if timeout is not None:
+                elapsed = (datetime.now() - start_time).total_seconds()
+                if elapsed > timeout:
+                    logger.warning(f"Таймаут ожидания завершения задач ({timeout} сек)")
+                    return False
+
+            with self.lock:
+                active_count = len([j for j in self.jobs.values()
+                                   if j.status in [JobStatus.PENDING, JobStatus.PROCESSING]])
+
+            if active_count == 0:
+                return True
+
+            import time
+            time.sleep(0.5)

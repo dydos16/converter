@@ -9,7 +9,8 @@ from PySide6.QtWidgets import (
     QPushButton, QListWidget, QListWidgetItem, QLabel,
     QComboBox, QProgressBar, QFileDialog, QMessageBox,
     QGroupBox, QCheckBox, QSpinBox, QSlider,
-    QTabWidget, QTextEdit, QApplication, QMenu
+    QTabWidget, QTextEdit, QApplication, QMenu,
+    QSplitter, QFrame, QGridLayout
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QAction
@@ -78,7 +79,7 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Настраивает интерфейс"""
         self.setWindowTitle("File Converter Pro")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 100, 1400, 900)
 
         # Центральный виджет
         central_widget = QWidget()
@@ -113,6 +114,9 @@ class MainWindow(QMainWindow):
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumWidth(200)
         self.statusBar().addPermanentWidget(self.progress_bar)
+
+        self.active_jobs_label = QLabel("Активных: 0")
+        self.statusBar().addPermanentWidget(self.active_jobs_label)
 
     def setup_conversion_tab(self, parent: QWidget):
         """Настраивает вкладку конвертации"""
@@ -158,6 +162,19 @@ class MainWindow(QMainWindow):
         self.convert_btn = QPushButton("🚀 Конвертировать")
         self.convert_btn.clicked.connect(self.start_conversion)
         self.convert_btn.setEnabled(False)
+        self.convert_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                font-size: 14px;
+                padding: 10px 20px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #666666;
+            }
+        """)
 
         buttons_layout.addWidget(self.add_files_btn)
         buttons_layout.addWidget(self.add_folder_btn)
@@ -170,19 +187,24 @@ class MainWindow(QMainWindow):
         layout.addLayout(top_panel)
 
         # Список файлов
+        file_group = QGroupBox("Файлы для конвертации")
+        file_layout = QVBoxLayout(file_group)
+
         self.file_list = QListWidget()
         self.file_list.setAcceptDrops(True)
         self.file_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.file_list.setMinimumHeight(300)
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self.show_file_context_menu)
-        layout.addWidget(QLabel("Файлы для конвертации:"))
-        layout.addWidget(self.file_list)
+        file_layout.addWidget(self.file_list)
+
+        layout.addWidget(file_group)
 
         # Панель прогресса
         progress_layout = QHBoxLayout()
         progress_layout.addWidget(QLabel("Общий прогресс:"))
         self.total_progress = QProgressBar()
+        self.total_progress.setMinimumHeight(25)
         progress_layout.addWidget(self.total_progress)
         layout.addLayout(progress_layout)
 
@@ -193,13 +215,17 @@ class MainWindow(QMainWindow):
         """Настраивает вкладку настроек"""
         layout = QVBoxLayout(parent)
 
+        # Создаем скролл для настроек
+        scroll = QWidget()
+        scroll_layout = QVBoxLayout(scroll)
+
         # Настройки изображений
         image_group = QGroupBox("Настройки изображений")
         image_layout = QVBoxLayout(image_group)
 
         # Качество
         quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel("Качество JPEG:"))
+        quality_layout.addWidget(QLabel("Качество JPEG/WebP:"))
         self.quality_slider = QSlider(Qt.Orientation.Horizontal)
         self.quality_slider.setRange(1, 100)
         quality_value = self.settings.get('image_quality', 85)
@@ -238,6 +264,91 @@ class MainWindow(QMainWindow):
         image_layout.addLayout(size_layout)
         layout.addWidget(image_group)
 
+        # Настройки PDF
+        pdf_group = QGroupBox("Настройки PDF")
+        pdf_layout = QVBoxLayout(pdf_group)
+
+        # DPI для PDF
+        dpi_layout = QHBoxLayout()
+        dpi_layout.addWidget(QLabel("DPI (качество PDF → изображения):"))
+        self.pdf_dpi_spin = QSpinBox()
+        self.pdf_dpi_spin.setRange(72, 600)
+        self.pdf_dpi_spin.setValue(self.settings.get('pdf_dpi', 200))
+        self.pdf_dpi_spin.setSuffix(" DPI")
+        dpi_layout.addWidget(self.pdf_dpi_spin)
+        dpi_layout.addStretch()
+        pdf_layout.addLayout(dpi_layout)
+
+        # Качество для PDF в изображения
+        pdf_quality_layout = QHBoxLayout()
+        pdf_quality_layout.addWidget(QLabel("Качество изображений:"))
+        self.pdf_quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self.pdf_quality_slider.setRange(1, 100)
+        self.pdf_quality_slider.setValue(self.settings.get('pdf_quality', 85))
+        self.pdf_quality_label = QLabel(f"{self.pdf_quality_slider.value()}%")
+        self.pdf_quality_slider.valueChanged.connect(
+            lambda v: self.pdf_quality_label.setText(f"{v}%")
+        )
+        pdf_quality_layout.addWidget(self.pdf_quality_slider)
+        pdf_quality_layout.addWidget(self.pdf_quality_label)
+        pdf_layout.addLayout(pdf_quality_layout)
+
+        # Сжатие PDF
+        compress_layout = QHBoxLayout()
+        compress_layout.addWidget(QLabel("Уровень сжатия PDF:"))
+        self.pdf_compress_spin = QSpinBox()
+        self.pdf_compress_spin.setRange(0, 9)
+        self.pdf_compress_spin.setValue(self.settings.get('pdf_compress_level', 6))
+        self.pdf_compress_spin.setToolTip("0 - без сжатия, 9 - максимальное сжатие")
+        compress_layout.addWidget(self.pdf_compress_spin)
+        compress_layout.addStretch()
+        pdf_layout.addLayout(compress_layout)
+
+        # Чекбоксы для PDF
+        self.pdf_remove_metadata_check = QCheckBox("Удалять метаданные")
+        self.pdf_remove_metadata_check.setChecked(self.settings.get('pdf_remove_metadata', False))
+        pdf_layout.addWidget(self.pdf_remove_metadata_check)
+
+        self.pdf_optimize_images_check = QCheckBox("Оптимизировать изображения")
+        self.pdf_optimize_images_check.setChecked(self.settings.get('pdf_optimize_images', True))
+        pdf_layout.addWidget(self.pdf_optimize_images_check)
+
+        # Стратегия извлечения таблиц
+        table_strategy_layout = QHBoxLayout()
+        table_strategy_layout.addWidget(QLabel("Стратегия извлечения таблиц:"))
+        self.table_strategy_combo = QComboBox()
+        self.table_strategy_combo.addItems(['auto', 'lattice', 'stream'])
+        self.table_strategy_combo.setCurrentText(self.settings.get('pdf_table_strategy', 'auto'))
+        self.table_strategy_combo.setToolTip(
+            "auto - автоматический выбор\n"
+            "lattice - для таблиц с сеткой\n"
+            "stream - для таблиц без сетки"
+        )
+        table_strategy_layout.addWidget(self.table_strategy_combo)
+        table_strategy_layout.addStretch()
+        pdf_layout.addLayout(table_strategy_layout)
+
+        layout.addWidget(pdf_group)
+
+        # Настройки HEIC
+        heic_group = QGroupBox("Настройки HEIC (iPhone фото)")
+        heic_layout = QVBoxLayout(heic_group)
+
+        heic_quality_layout = QHBoxLayout()
+        heic_quality_layout.addWidget(QLabel("Качество:"))
+        self.heic_quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self.heic_quality_slider.setRange(1, 100)
+        self.heic_quality_slider.setValue(self.settings.get('heic_quality', 85))
+        self.heic_quality_label = QLabel(f"{self.heic_quality_slider.value()}%")
+        self.heic_quality_slider.valueChanged.connect(
+            lambda v: self.heic_quality_label.setText(f"{v}%")
+        )
+        heic_quality_layout.addWidget(self.heic_quality_slider)
+        heic_quality_layout.addWidget(self.heic_quality_label)
+        heic_layout.addLayout(heic_quality_layout)
+
+        layout.addWidget(heic_group)
+
         # Общие настройки
         general_group = QGroupBox("Общие настройки")
         general_layout = QVBoxLayout(general_group)
@@ -254,6 +365,16 @@ class MainWindow(QMainWindow):
         show_notifications = self.settings.get('show_notifications', True)
         self.notifications_check.setChecked(show_notifications if show_notifications is not None else True)
 
+        # Максимум одновременных задач
+        max_jobs_layout = QHBoxLayout()
+        max_jobs_layout.addWidget(QLabel("Максимум одновременных задач:"))
+        self.max_jobs_spin = QSpinBox()
+        self.max_jobs_spin.setRange(1, 10)
+        self.max_jobs_spin.setValue(self.settings.get('max_concurrent_jobs', 3))
+        max_jobs_layout.addWidget(self.max_jobs_spin)
+        max_jobs_layout.addStretch()
+        general_layout.addLayout(max_jobs_layout)
+
         general_layout.addWidget(self.auto_open_check)
         general_layout.addWidget(self.keep_name_check)
         general_layout.addWidget(self.notifications_check)
@@ -261,11 +382,28 @@ class MainWindow(QMainWindow):
         layout.addWidget(general_group)
 
         # Кнопка сохранения
-        save_btn = QPushButton("Сохранить настройки")
+        save_btn = QPushButton("💾 Сохранить настройки")
         save_btn.clicked.connect(self.save_settings)
+        save_btn.setMinimumHeight(40)
         layout.addWidget(save_btn)
 
         layout.addStretch()
+
+        # Добавляем скролл
+        scroll_layout.addWidget(scroll)
+        scroll_layout.addStretch()
+
+        scroll_widget = QWidget()
+        scroll_widget.setLayout(scroll_layout)
+
+        # Создаем область прокрутки
+        from PySide6.QtWidgets import QScrollArea
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(scroll_widget)
+        scroll_area.setWidgetResizable(True)
+
+        parent_layout = QVBoxLayout(parent)
+        parent_layout.addWidget(scroll_area)
 
     def setup_log_tab(self, parent: QWidget):
         """Настраивает вкладку лога"""
@@ -275,6 +413,16 @@ class MainWindow(QMainWindow):
         self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Courier", 10))
         layout.addWidget(self.log_text)
+
+        # Кнопки управления логом
+        log_buttons_layout = QHBoxLayout()
+
+        clear_log_btn = QPushButton("🗑️ Очистить лог")
+        clear_log_btn.clicked.connect(lambda: self.log_text.clear())
+        log_buttons_layout.addWidget(clear_log_btn)
+
+        log_buttons_layout.addStretch()
+        layout.addLayout(log_buttons_layout)
 
     def setup_callbacks(self):
         """Настраивает callback'и менеджера задач"""
@@ -296,9 +444,24 @@ class MainWindow(QMainWindow):
 
     def save_settings(self):
         """Сохраняет настройки"""
+        # Настройки изображений
         self.settings.set('image_quality', self.quality_slider.value())
         self.settings.set('image_max_width', self.max_width_spin.value() if self.max_width_spin.value() > 0 else None)
         self.settings.set('image_max_height', self.max_height_spin.value() if self.max_height_spin.value() > 0 else None)
+
+        # Настройки PDF
+        self.settings.set('pdf_dpi', self.pdf_dpi_spin.value())
+        self.settings.set('pdf_quality', self.pdf_quality_slider.value())
+        self.settings.set('pdf_compress_level', self.pdf_compress_spin.value())
+        self.settings.set('pdf_remove_metadata', self.pdf_remove_metadata_check.isChecked())
+        self.settings.set('pdf_optimize_images', self.pdf_optimize_images_check.isChecked())
+        self.settings.set('pdf_table_strategy', self.table_strategy_combo.currentText())
+
+        # Настройки HEIC
+        self.settings.set('heic_quality', self.heic_quality_slider.value())
+
+        # Общие настройки
+        self.settings.set('max_concurrent_jobs', self.max_jobs_spin.value())
         self.settings.set('auto_open_folder', self.auto_open_check.isChecked())
         self.settings.set('keep_original_name', self.keep_name_check.isChecked())
         self.settings.set('show_notifications', self.notifications_check.isChecked())
@@ -334,20 +497,13 @@ class MainWindow(QMainWindow):
         ext = file_path.suffix.lower().lstrip('.')
 
         supported_formats = {
-            'docx': 'docx',
-            'doc': 'doc',
-            'pdf': 'pdf',
-            'png': 'png',
-            'jpg': 'jpg',
-            'jpeg': 'jpg',
-            'webp': 'webp',
-            'bmp': 'bmp',
-            'gif': 'gif',
-            'tiff': 'tiff',
-            'xlsx': 'xlsx',
-            'xls': 'xls',
-            'csv': 'csv',
-            'txt': 'txt'
+            'docx': 'docx', 'doc': 'doc', 'pdf': 'pdf',
+            'pptx': 'pptx', 'ppt': 'ppt', 'pps': 'pps', 'ppsx': 'ppsx',
+            'png': 'png', 'jpg': 'jpg', 'jpeg': 'jpg',
+            'webp': 'webp', 'bmp': 'bmp', 'gif': 'gif', 'tiff': 'tiff',
+            'heic': 'heic', 'heif': 'heif',
+            'xlsx': 'xlsx', 'xls': 'xls', 'csv': 'csv',
+            'odt': 'odt', 'rtf': 'rtf', 'txt': 'txt'
         }
 
         return supported_formats.get(ext, ext)
@@ -392,18 +548,6 @@ class MainWindow(QMainWindow):
         enabled = has_files and has_format and has_output and valid_files
         self.convert_btn.setEnabled(enabled)
 
-        if not enabled:
-            if not has_files:
-                self.convert_btn.setToolTip("Добавьте файлы для конвертации")
-            elif not has_format:
-                self.convert_btn.setToolTip("Выберите входной формат")
-            elif not has_output:
-                self.convert_btn.setToolTip("Выберите выходной формат")
-            elif not valid_files:
-                self.convert_btn.setToolTip("Выбранные файлы не соответствуют формату")
-        else:
-            self.convert_btn.setToolTip("Начать конвертацию")
-
     def add_files(self):
         """Добавляет файлы через диалог"""
         files, _ = QFileDialog.getOpenFileNames(
@@ -440,11 +584,6 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, str(file_path))
             item.setForeground(Qt.GlobalColor.red)
             self.file_list.addItem(item)
-            self.show_warning_signal.emit(
-                "Не поддерживается",
-                f"Формат {ext} не поддерживается для конвертации\nФайл добавлен, но не будет обработан"
-            )
-            self.update_convert_button()
             return
 
         size_str = get_file_size_str(file_path)
@@ -462,7 +601,6 @@ class MainWindow(QMainWindow):
                 index = self.input_format_combo.findText(detected_format)
                 if index >= 0:
                     self.input_format_combo.setCurrentIndex(index)
-                    self.status_label.setText(f"Автоматически определен формат: {detected_format}")
 
         self.check_file_formats()
         self.update_convert_button()
@@ -593,11 +731,35 @@ class MainWindow(QMainWindow):
 
             ensure_output_directory(output_path)
 
+            # Передаем настройки в конвертер
+            kwargs = {}
+
+            # Настройки для изображений
+            if output_format in ['jpg', 'jpeg', 'webp']:
+                kwargs['quality'] = self.settings.get('image_quality', 85)
+
+            # Настройки для PDF
+            if input_format == 'pdf':
+                if output_format in ['png', 'jpg', 'jpeg', 'webp']:
+                    kwargs['dpi'] = self.settings.get('pdf_dpi', 200)
+                    kwargs['quality'] = self.settings.get('pdf_quality', 85)
+                elif output_format in ['xlsx', 'xls', 'csv']:
+                    kwargs['table_strategy'] = self.settings.get('pdf_table_strategy', 'auto')
+                elif output_format == 'pdf':
+                    kwargs['compression_level'] = self.settings.get('pdf_compress_level', 6)
+                    kwargs['remove_metadata'] = self.settings.get('pdf_remove_metadata', False)
+                    kwargs['optimize_images'] = self.settings.get('pdf_optimize_images', True)
+
+            # Настройки для HEIC
+            if input_format in ['heic', 'heif']:
+                kwargs['quality'] = self.settings.get('heic_quality', 85)
+
             self.job_manager.add_job(
                 input_path,
                 output_path,
                 input_format,
-                output_format
+                output_format,
+                **kwargs
             )
             added_count += 1
 
@@ -623,6 +785,7 @@ class MainWindow(QMainWindow):
                         if job.status == JobStatus.COMPLETED)
 
         self.status_label.setText(f"Активных: {active}, Завершено: {completed}/{total}")
+        self.active_jobs_label.setText(f"Активных: {active}")
 
         if total > 0:
             progress = int((completed / total) * 100)
@@ -633,6 +796,7 @@ class MainWindow(QMainWindow):
             self.convert_btn.setEnabled(True)
             self.status_label.setText("Конвертация завершена!")
             self.total_progress.setValue(0)
+            self.active_jobs_label.setText("Активных: 0")
 
             self.job_manager.jobs.clear()
 

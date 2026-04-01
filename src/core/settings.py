@@ -11,19 +11,32 @@ class Settings:
     """Класс для управления настройками приложения"""
 
     DEFAULT_SETTINGS = {
+        # Общие настройки
         'theme': 'dark',
         'max_concurrent_jobs': 4,
-        'image_quality': 85,
-        'image_max_width': None,
-        'image_max_height': None,
-        'pdf_dpi': 200,
-        'pdf_compress_level': 6,
-        'pdf_extract_text': True,
-        'pdf_page_range': '',
         'output_directory': str(Path.home() / 'Downloads'),
         'auto_open_folder': True,
         'keep_original_name': True,
         'show_notifications': True,
+
+        # Настройки изображений
+        'image_quality': 85,
+        'image_max_width': None,
+        'image_max_height': None,
+
+        # Настройки PDF
+        'pdf_dpi': 200,
+        'pdf_quality': 85,
+        'pdf_page_range': '',
+        'pdf_compress_level': 6,
+        'pdf_remove_metadata': False,
+        'pdf_optimize_images': True,
+        'pdf_table_strategy': 'auto',  # auto, lattice, stream
+
+        # Настройки HEIC
+        'heic_quality': 85,
+
+        # История
         'recent_files': [],
         'recent_formats': []
     }
