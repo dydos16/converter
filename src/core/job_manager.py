@@ -254,7 +254,7 @@ class JobManager:
             job.status = JobStatus.PROCESSING
             self._trigger_callback('on_job_started', job)
 
-            # Создаем конвертер с передачей дополнительных параметров
+            # Создаем конвертер
             converter = ConverterFactory.get_converter(
                 job.input_format,
                 job.output_format,
@@ -264,10 +264,21 @@ class JobManager:
             if not converter:
                 raise Exception(f"Конвертер не найден для {job.input_format} -> {job.output_format}")
 
-            # Устанавливаем коллбеки
-            converter.progress_callback = lambda p: self._update_job_progress(job.id, p)
-            converter.status_callback = lambda s: logger.debug(f"Job {job.id}: {s}")
-            converter.error_callback = lambda e: self._update_job_error(job.id, e)
+            # Устанавливаем коллбеки с обновлением прогресса
+            def progress_callback(p):
+                job.update_progress(p)
+                self._trigger_callback('on_job_progress', job)
+
+            def status_callback(s):
+                logger.debug(f"Job {job.id}: {s}")
+
+            def error_callback(e):
+                job.error_message = e
+                logger.error(f"Job {job.id}: {e}")
+
+            converter.progress_callback = progress_callback
+            converter.status_callback = status_callback
+            converter.error_callback = error_callback
 
             job.converter = converter
 

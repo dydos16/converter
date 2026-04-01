@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QComboBox, QProgressBar, QFileDialog, QMessageBox,
     QGroupBox, QCheckBox, QSpinBox, QSlider,
     QTabWidget, QTextEdit, QApplication, QMenu,
-    QSplitter, QFrame, QGridLayout
+    QSplitter, QFrame, QGridLayout, QScrollArea
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QAction
@@ -87,6 +87,7 @@ class MainWindow(QMainWindow):
 
         # Основной layout
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setContentsMargins(10, 10, 10, 10)
 
         # Создаем вкладки
         tabs = QTabWidget()
@@ -121,6 +122,7 @@ class MainWindow(QMainWindow):
     def setup_conversion_tab(self, parent: QWidget):
         """Настраивает вкладку конвертации"""
         layout = QVBoxLayout(parent)
+        layout.setContentsMargins(10, 10, 10, 10)
 
         # Верхняя панель
         top_panel = QHBoxLayout()
@@ -162,11 +164,14 @@ class MainWindow(QMainWindow):
         self.convert_btn = QPushButton("🚀 Конвертировать")
         self.convert_btn.clicked.connect(self.start_conversion)
         self.convert_btn.setEnabled(False)
+        self.convert_btn.setMinimumHeight(40)
         self.convert_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
                 font-size: 14px;
+                font-weight: bold;
                 padding: 10px 20px;
+                border-radius: 6px;
             }
             QPushButton:hover {
                 background-color: #45a049;
@@ -213,11 +218,15 @@ class MainWindow(QMainWindow):
 
     def setup_settings_tab(self, parent: QWidget):
         """Настраивает вкладку настроек"""
-        layout = QVBoxLayout(parent)
+        # Создаем скролл область
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
 
-        # Создаем скролл для настроек
-        scroll = QWidget()
-        scroll_layout = QVBoxLayout(scroll)
+        # Контейнер для содержимого
+        content_widget = QWidget()
+        layout = QVBoxLayout(content_widget)
+        layout.setContentsMargins(10, 10, 10, 10)
 
         # Настройки изображений
         image_group = QGroupBox("Настройки изображений")
@@ -389,25 +398,18 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        # Добавляем скролл
-        scroll_layout.addWidget(scroll)
-        scroll_layout.addStretch()
+        # Устанавливаем содержимое в скролл
+        scroll.setWidget(content_widget)
 
-        scroll_widget = QWidget()
-        scroll_widget.setLayout(scroll_layout)
-
-        # Создаем область прокрутки
-        from PySide6.QtWidgets import QScrollArea
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(scroll_widget)
-        scroll_area.setWidgetResizable(True)
-
+        # Добавляем скролл в родительский виджет
         parent_layout = QVBoxLayout(parent)
-        parent_layout.addWidget(scroll_area)
+        parent_layout.setContentsMargins(0, 0, 0, 0)
+        parent_layout.addWidget(scroll)
 
     def setup_log_tab(self, parent: QWidget):
         """Настраивает вкладку лога"""
         layout = QVBoxLayout(parent)
+        layout.setContentsMargins(10, 10, 10, 10)
 
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
@@ -749,6 +751,9 @@ class MainWindow(QMainWindow):
                     kwargs['compression_level'] = self.settings.get('pdf_compress_level', 6)
                     kwargs['remove_metadata'] = self.settings.get('pdf_remove_metadata', False)
                     kwargs['optimize_images'] = self.settings.get('pdf_optimize_images', True)
+                elif output_format in ['pptx', 'ppt']:
+                    kwargs['dpi'] = self.settings.get('pdf_dpi', 150)
+                    kwargs['quality'] = self.settings.get('pdf_quality', 85)
 
             # Настройки для HEIC
             if input_format in ['heic', 'heif']:
@@ -780,25 +785,35 @@ class MainWindow(QMainWindow):
     def update_status(self):
         """Обновляет статус"""
         active = self.job_manager.get_active_jobs_count()
-        total = len(self.job_manager.get_all_jobs())
-        completed = sum(1 for job in self.job_manager.get_all_jobs()
-                        if job.status == JobStatus.COMPLETED)
+        jobs = self.job_manager.get_all_jobs()
+        total = len(jobs)
+        completed = sum(1 for job in jobs if job.status == JobStatus.COMPLETED)
+
+        # Считаем средний прогресс
+        if total > 0:
+            total_progress = sum(job.progress for job in jobs) // total
+            self.total_progress.setValue(total_progress)
 
         self.status_label.setText(f"Активных: {active}, Завершено: {completed}/{total}")
         self.active_jobs_label.setText(f"Активных: {active}")
-
-        if total > 0:
-            progress = int((completed / total) * 100)
-            self.total_progress.setValue(progress)
 
         if completed == total and total > 0:
             self.status_timer.stop()
             self.convert_btn.setEnabled(True)
             self.status_label.setText("Конвертация завершена!")
-            self.total_progress.setValue(0)
+            self.total_progress.setValue(100)
             self.active_jobs_label.setText("Активных: 0")
 
+            # Очищаем список задач
             self.job_manager.jobs.clear()
+
+            # Очищаем список файлов от прогресса
+            for i in range(self.file_list.count()):
+                item = self.file_list.item(i)
+                text = item.text()
+                if '%' in text:
+                    text = text.split(' (')[0]
+                    item.setText(text)
 
             if self.settings.get('auto_open_folder', True):
                 import subprocess
@@ -818,8 +833,30 @@ class MainWindow(QMainWindow):
         )
 
     def on_job_progress(self, job: ConversionJob):
-        """Обработчик прогресса задачи"""
-        pass
+        """Обработчик прогресса задачи - безопасное обновление"""
+
+        # Используем сигнал для безопасного обновления UI из другого потока
+        def update_ui():
+            try:
+                # Обновляем элемент в списке
+                for i in range(self.file_list.count()):
+                    item = self.file_list.item(i)
+                    file_path = Path(item.data(Qt.ItemDataRole.UserRole))
+                    if file_path == job.input_path:
+                        old_text = item.text()
+                        if '%' in old_text:
+                            old_text = old_text.split(' (')[0]
+                        item.setText(f"{old_text} ({job.progress}%)")
+                        break
+
+                # Обновляем общий прогресс
+                self.update_status()
+            except Exception as e:
+                logger.error(f"Ошибка обновления UI: {e}")
+
+        # Вызываем через QTimer для безопасного обновления
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, update_ui)
 
     def on_job_completed(self, job: ConversionJob):
         """Обработчик завершения задачи"""

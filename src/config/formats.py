@@ -66,9 +66,9 @@ SUPPORTED_CONVERSIONS = {
     ('pdf', 'tiff'): 'PdfToImageConverter',
 
     # PDF в таблицы
-    ('pdf', 'xlsx'): 'PdfToSpreadsheetConverter',
-    ('pdf', 'xls'): 'PdfToSpreadsheetConverter',
-    ('pdf', 'csv'): 'PdfToSpreadsheetConverter',
+    # ('pdf', 'xlsx'): 'PdfToSpreadsheetConverter',
+    # ('pdf', 'xls'): 'PdfToSpreadsheetConverter',
+    # ('pdf', 'csv'): 'PdfToSpreadsheetConverter',
 
     # PDF в HTML
     ('pdf', 'html'): 'PdfToHtmlConverter',

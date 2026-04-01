@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from loguru import logger
 
 from gui.main_window import MainWindow
@@ -41,10 +42,21 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
 
+    # Устанавливаем атрибуты до создания QApplication
+    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
 
-    # Настройка стиля
+    # Устанавливаем стандартный шрифт системы вместо SF Pro Text
+    default_font = QFont()
+    default_font.setPointSize(11)
+    app.setFont(default_font)
+
+    # Настройка стиля (убираем использование специфических шрифтов)
     app.setStyleSheet("""
         QMainWindow {
             background-color: #2b2b2b;
@@ -134,7 +146,26 @@ def main():
             background-color: #1e1e1e;
             color: #00ff00;
             border: 1px solid #555;
-            font-family: monospace;
+        }
+        QScrollArea {
+            background-color: #2b2b2b;
+            border: none;
+        }
+        QScrollBar:vertical {
+            background-color: #2b2b2b;
+            width: 12px;
+            margin: 0px;
+        }
+        QScrollBar::handle:vertical {
+            background-color: #555;
+            border-radius: 6px;
+            min-height: 20px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background-color: #666;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0px;
         }
     """)
 
