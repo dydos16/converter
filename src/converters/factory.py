@@ -8,6 +8,18 @@ from .docx_to_pdf import DocxToPdfConverter
 from .pptx_to_pdf import PptxToPdfConverter
 from .image_converter import ImageConverter
 from .pdf_to_pptx import PdfToPptxConverter
+from .pdf_to_docx import PdfToDocxConverter
+from .pdf_to_text import PdfToTextConverter
+from .pdf_to_image import PdfToImageConverter
+from .pdf_compressor import PdfCompressor
+from .pdf_to_spreadsheet import PdfToSpreadsheetConverter
+from .pdf_to_html import PdfToHtmlConverter
+from .pdf_to_json import PdfToJsonConverter
+from .pdf_to_xml import PdfToXmlConverter
+from .pdf_to_markdown import PdfToMarkdownConverter
+from .spreadsheet_converter import SpreadsheetConverter
+from .text_document_converter import TextDocumentConverter
+from .heic_converter import HeicConverter
 from src.config.formats import (
     SUPPORTED_CONVERSIONS,
     ALL_INPUT_FORMATS,
@@ -38,10 +50,15 @@ class ConverterFactory:
         # Создаем конвертер
         converter_class = get_converter_class(input_ext, output_ext)
 
+        # Word документы в PDF
         if converter_class == 'DocxToPdfConverter':
             return DocxToPdfConverter()
+
+        # PowerPoint в PDF
         elif converter_class == 'PptxToPdfConverter':
             return PptxToPdfConverter()
+
+        # Изображения
         elif converter_class == 'ImageConverter':
             converter = ImageConverter()
             if 'quality' in kwargs:
@@ -52,8 +69,83 @@ class ConverterFactory:
                     kwargs.get('max_height')
                 )
             return converter
+
+        # PDF в PPTX/PPT
         elif converter_class == 'PdfToPptxConverter':
-            return PdfToPptxConverter()
+            converter = PdfToPptxConverter()
+            if 'dpi' in kwargs:
+                converter.dpi = kwargs['dpi']
+            if 'quality' in kwargs:
+                converter.quality = kwargs['quality']
+            return converter
+
+        # PDF в DOCX
+        elif converter_class == 'PdfToDocxConverter':
+            converter = PdfToDocxConverter()
+            if 'extract_text_only' in kwargs:
+                converter.set_extract_text_only(kwargs['extract_text_only'])
+            return converter
+
+        # PDF в TXT
+        elif converter_class == 'PdfToTextConverter':
+            return PdfToTextConverter()
+
+        # PDF в изображения
+        elif converter_class == 'PdfToImageConverter':
+            converter = PdfToImageConverter()
+            if 'quality' in kwargs:
+                converter.set_quality(kwargs['quality'])
+            if 'dpi' in kwargs:
+                converter.set_dpi(kwargs['dpi'])
+            if 'page_range' in kwargs:
+                converter.set_page_range(kwargs['page_range'])
+            return converter
+
+        # Сжатие PDF
+        elif converter_class == 'PdfCompressor':
+            converter = PdfCompressor()
+            if 'compression_level' in kwargs:
+                converter.set_compression(kwargs['compression_level'])
+            if 'remove_metadata' in kwargs:
+                converter.set_remove_metadata(kwargs['remove_metadata'])
+            if 'optimize_images' in kwargs:
+                converter.set_optimize_images(kwargs['optimize_images'])
+            return converter
+
+        # PDF в таблицы
+        elif converter_class == 'PdfToSpreadsheetConverter':
+            return PdfToSpreadsheetConverter()
+
+        # PDF в HTML
+        elif converter_class == 'PdfToHtmlConverter':
+            return PdfToHtmlConverter()
+
+        # PDF в JSON
+        elif converter_class == 'PdfToJsonConverter':
+            return PdfToJsonConverter()
+
+        # PDF в XML
+        elif converter_class == 'PdfToXmlConverter':
+            return PdfToXmlConverter()
+
+        # PDF в Markdown
+        elif converter_class == 'PdfToMarkdownConverter':
+            return PdfToMarkdownConverter()
+
+        # Таблицы (Excel, CSV)
+        elif converter_class == 'SpreadsheetConverter':
+            return SpreadsheetConverter()
+
+        # Текстовые документы (ODT, RTF)
+        elif converter_class == 'TextDocumentConverter':
+            return TextDocumentConverter()
+
+        # HEIC изображения
+        elif converter_class == 'HeicConverter':
+            converter = HeicConverter()
+            if 'quality' in kwargs:
+                converter.set_quality(kwargs['quality'])
+            return converter
         
         logger.error(f"Неизвестный конвертер: {converter_class}")
         return None

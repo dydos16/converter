@@ -42,17 +42,82 @@ SUPPORTED_CONVERSIONS = {
     ('tiff', 'jpg'): 'ImageConverter',
     ('tiff', 'webp'): 'ImageConverter',
 
-    # PDF конвертации
+    # ============ PDF КОНВЕРТАЦИИ (ВО ВСЕ ФОРМАТЫ) ============
+
+    # PDF в документы
     ('pdf', 'docx'): 'PdfToDocxConverter',
+    ('pdf', 'doc'): 'PdfToDocxConverter',
+    ('pdf', 'odt'): 'PdfToDocxConverter',
+    ('pdf', 'rtf'): 'PdfToDocxConverter',
     ('pdf', 'txt'): 'PdfToTextConverter',
+
+    # PDF в презентации
+    ('pdf', 'pptx'): 'PdfToPptxConverter',
+    ('pdf', 'ppt'): 'PdfToPptxConverter',
+    ('pdf', 'odp'): 'PdfToPptxConverter',
+
+    # PDF в изображения
     ('pdf', 'png'): 'PdfToImageConverter',
     ('pdf', 'jpg'): 'PdfToImageConverter',
     ('pdf', 'jpeg'): 'PdfToImageConverter',
     ('pdf', 'webp'): 'PdfToImageConverter',
-    ('pdf', 'pptx'): 'PdfToPptxConverter',
-    ('pdf', 'ppt'): 'PdfToPptxConverter',
-    ('pdf', 'odp'): 'PdfToPptxConverter',
-    ('pdf', 'pdf'): 'PdfConverter',
+    ('pdf', 'bmp'): 'PdfToImageConverter',
+    ('pdf', 'gif'): 'PdfToImageConverter',
+    ('pdf', 'tiff'): 'PdfToImageConverter',
+
+    # PDF в таблицы
+    ('pdf', 'xlsx'): 'PdfToSpreadsheetConverter',
+    ('pdf', 'xls'): 'PdfToSpreadsheetConverter',
+    ('pdf', 'csv'): 'PdfToSpreadsheetConverter',
+
+    # PDF в HTML
+    ('pdf', 'html'): 'PdfToHtmlConverter',
+
+    # PDF в JSON
+    ('pdf', 'json'): 'PdfToJsonConverter',
+
+    # PDF в XML
+    ('pdf', 'xml'): 'PdfToXmlConverter',
+
+    # PDF в Markdown
+    ('pdf', 'md'): 'PdfToMarkdownConverter',
+
+    # Сжатие PDF (PDF -> PDF)
+    ('pdf', 'pdf'): 'PdfCompressor',
+
+    # ============ ОСТАЛЬНЫЕ КОНВЕРТАЦИИ ============
+
+    # Таблицы (Excel, CSV)
+    ('xlsx', 'pdf'): 'SpreadsheetConverter',
+    ('xlsx', 'csv'): 'SpreadsheetConverter',
+    ('xlsx', 'xls'): 'SpreadsheetConverter',
+    ('xls', 'pdf'): 'SpreadsheetConverter',
+    ('xls', 'csv'): 'SpreadsheetConverter',
+    ('xls', 'xlsx'): 'SpreadsheetConverter',
+    ('csv', 'pdf'): 'SpreadsheetConverter',
+    ('csv', 'xlsx'): 'SpreadsheetConverter',
+    ('csv', 'xls'): 'SpreadsheetConverter',
+
+    # Текстовые документы
+    ('odt', 'docx'): 'TextDocumentConverter',
+    ('odt', 'pdf'): 'TextDocumentConverter',
+    ('odt', 'txt'): 'TextDocumentConverter',
+    ('odt', 'rtf'): 'TextDocumentConverter',
+    ('rtf', 'docx'): 'TextDocumentConverter',
+    ('rtf', 'pdf'): 'TextDocumentConverter',
+    ('rtf', 'txt'): 'TextDocumentConverter',
+    ('txt', 'docx'): 'TextDocumentConverter',
+    ('txt', 'pdf'): 'TextDocumentConverter',
+
+    # HEIC изображения (iPhone)
+    ('heic', 'jpg'): 'HeicConverter',
+    ('heic', 'jpeg'): 'HeicConverter',
+    ('heic', 'png'): 'HeicConverter',
+    ('heic', 'webp'): 'HeicConverter',
+    ('heif', 'jpg'): 'HeicConverter',
+    ('heif', 'jpeg'): 'HeicConverter',
+    ('heif', 'png'): 'HeicConverter',
+    ('heif', 'webp'): 'HeicConverter',
 }
 
 # Все поддерживаемые входные форматы
@@ -77,15 +142,34 @@ FORMAT_GROUPS = {
     },
     'images': {
         'name': 'Изображения',
-        'input_formats': ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tiff'],
+        'input_formats': ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tiff', 'heic', 'heif'],
         'output_formats': ['png', 'jpg', 'jpeg', 'webp', 'bmp'],
         'icon': '🖼️'
     },
     'pdf': {
         'name': 'PDF документы',
         'input_formats': ['pdf'],
-        'output_formats': ['docx', 'txt', 'png', 'jpg', 'jpeg', 'webp', 'pptx', 'ppt', 'odp'],
+        'output_formats': [
+            'docx', 'doc', 'odt', 'rtf', 'txt',           # Документы
+            'pptx', 'ppt', 'odp',                          # Презентации
+            'png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tiff',  # Изображения
+            'xlsx', 'xls', 'csv',                          # Таблицы
+            'html', 'json', 'xml', 'md',                   # Веб и данные
+            'pdf'                                          # Сжатие
+        ],
         'icon': '📑'
+    },
+    'spreadsheets': {
+        'name': 'Таблицы',
+        'input_formats': ['xlsx', 'xls', 'csv'],
+        'output_formats': ['xlsx', 'xls', 'csv', 'pdf'],
+        'icon': '📊'
+    },
+    'text_documents': {
+        'name': 'Текстовые документы',
+        'input_formats': ['odt', 'rtf', 'txt'],
+        'output_formats': ['docx', 'pdf', 'txt', 'odt', 'rtf'],
+        'icon': '📝'
     }
 }
 
@@ -93,9 +177,13 @@ FORMAT_GROUPS = {
 FILE_TYPE_INFO = {
     'docx': {'name': 'Word Document', 'icon': '📝'},
     'doc': {'name': 'Word Document (Old)', 'icon': '📝'},
+    'odt': {'name': 'OpenDocument Text', 'icon': '📝'},
+    'rtf': {'name': 'Rich Text Format', 'icon': '📝'},
+    'txt': {'name': 'Text File', 'icon': '📝'},
     'pdf': {'name': 'PDF Document', 'icon': '📄'},
     'pptx': {'name': 'PowerPoint Presentation', 'icon': '📊'},
     'ppt': {'name': 'PowerPoint Presentation (Old)', 'icon': '📊'},
+    'odp': {'name': 'OpenDocument Presentation', 'icon': '📊'},
     'pps': {'name': 'PowerPoint Slideshow', 'icon': '📊'},
     'ppsx': {'name': 'PowerPoint Slideshow', 'icon': '📊'},
     'png': {'name': 'PNG Image', 'icon': '🖼️'},
@@ -105,8 +193,15 @@ FILE_TYPE_INFO = {
     'bmp': {'name': 'BMP Image', 'icon': '🖼️'},
     'gif': {'name': 'GIF Image', 'icon': '🖼️'},
     'tiff': {'name': 'TIFF Image', 'icon': '🖼️'},
-    'txt': {'name': 'Text File', 'icon': '📝'},
-    'odp': {'name': 'OpenDocument Presentation', 'icon': '📊'},
+    'heic': {'name': 'HEIC Image (iPhone)', 'icon': '🖼️'},
+    'heif': {'name': 'HEIF Image', 'icon': '🖼️'},
+    'xlsx': {'name': 'Excel Workbook', 'icon': '📊'},
+    'xls': {'name': 'Excel Workbook (Old)', 'icon': '📊'},
+    'csv': {'name': 'CSV File', 'icon': '📊'},
+    'html': {'name': 'HTML Web Page', 'icon': '🌐'},
+    'json': {'name': 'JSON Data', 'icon': '📋'},
+    'xml': {'name': 'XML Data', 'icon': '📋'},
+    'md': {'name': 'Markdown', 'icon': '📝'},
 }
 
 def get_output_formats_for_input(input_format: str) -> list:
