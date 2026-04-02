@@ -13,6 +13,9 @@ from pathlib import Path
 # Добавляем текущую директорию в путь
 sys.path.insert(0, str(Path(__file__).parent))
 
+# Флаг для определения, что мы в собранном приложении
+IS_FROZEN = getattr(sys, 'frozen', False)
+
 
 def get_os():
     """Определяет операционную систему"""
@@ -65,6 +68,15 @@ def run_command(cmd, description, show_output=True):
     except Exception as e:
         print(f"   ❌ Ошибка: {e}")
         return False
+
+
+def get_user_input(prompt, default='y'):
+    """Получает ввод пользователя или возвращает значение по умолчанию в собранном приложении"""
+    if IS_FROZEN:
+        print(f"{prompt} (автоматически: {default})")
+        return default
+    else:
+        return input(prompt).lower()
 
 
 def install_requirements():
@@ -263,7 +275,7 @@ def main():
         missing, optional = check_python_packages()
         if missing:
             show_manual_instructions(missing)
-            response = input("\nПродолжить без установки? (y/n): ").lower()
+            response = get_user_input("\nПродолжить без установки? (y/n): ", 'y')
             if response != 'y':
                 sys.exit(1)
     else:
@@ -274,7 +286,7 @@ def main():
     if missing:
         print(f"\n⚠️  Отсутствуют обязательные пакеты: {', '.join(missing)}")
         show_manual_instructions(missing)
-        response = input("\nПродолжить без этих пакетов? (y/n): ").lower()
+        response = get_user_input("\nПродолжить без этих пакетов? (y/n): ", 'y')
         if response != 'y':
             sys.exit(1)
 
@@ -295,7 +307,7 @@ def main():
     if not check_libreoffice_installed():
         print("\n⚠️  LibreOffice не найден!")
 
-        response = input("\nУстановить LibreOffice автоматически? (y/n): ").lower()
+        response = get_user_input("\nУстановить LibreOffice автоматически? (y/n): ", 'y')
         if response == 'y':
             if not install_libreoffice():
                 print("\n❌ Не удалось установить LibreOffice автоматически")
@@ -307,8 +319,8 @@ def main():
                 else:
                     print("  sudo apt install libreoffice")
 
-                response = input("\nПродолжить без LibreOffice? (y/n): ").lower()
-                if response != 'y':
+                response2 = get_user_input("\nПродолжить без LibreOffice? (y/n): ", 'y')
+                if response2 != 'y':
                     sys.exit(1)
             else:
                 print("\n✅ LibreOffice успешно установлен!")
