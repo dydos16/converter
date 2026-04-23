@@ -14,7 +14,7 @@ SUPPORTED_CONVERSIONS = {
     ('pps', 'pdf'): 'PptxToPdfConverter',
     ('ppsx', 'pdf'): 'PptxToPdfConverter',
 
-    # Изображения
+    # Изображения - ВСЕ КОМБИНАЦИИ
     ('png', 'jpg'): 'ImageConverter',
     ('png', 'jpeg'): 'ImageConverter',
     ('png', 'webp'): 'ImageConverter',
@@ -42,7 +42,7 @@ SUPPORTED_CONVERSIONS = {
     ('tiff', 'jpg'): 'ImageConverter',
     ('tiff', 'webp'): 'ImageConverter',
 
-    # ============ PDF КОНВЕРТАЦИИ (ВО ВСЕ ФОРМАТЫ) ============
+    # ============ PDF КОНВЕРТАЦИИ ============
 
     # PDF в документы
     ('pdf', 'docx'): 'PdfToDocxConverter',
@@ -66,9 +66,9 @@ SUPPORTED_CONVERSIONS = {
     ('pdf', 'tiff'): 'PdfToImageConverter',
 
     # PDF в таблицы
-    # ('pdf', 'xlsx'): 'PdfToSpreadsheetConverter',
-    # ('pdf', 'xls'): 'PdfToSpreadsheetConverter',
-    # ('pdf', 'csv'): 'PdfToSpreadsheetConverter',
+    ('pdf', 'xlsx'): 'PdfToSpreadsheetConverter',
+    ('pdf', 'xls'): 'PdfToSpreadsheetConverter',
+    ('pdf', 'csv'): 'PdfToSpreadsheetConverter',
 
     # PDF в HTML
     ('pdf', 'html'): 'PdfToHtmlConverter',
@@ -204,24 +204,28 @@ FILE_TYPE_INFO = {
     'md': {'name': 'Markdown', 'icon': '📝'},
 }
 
+
 def get_output_formats_for_input(input_format: str) -> list:
     """Возвращает возможные выходные форматы для входного"""
     return sorted([
         out_fmt for in_fmt, out_fmt in SUPPORTED_CONVERSIONS.keys()
-        if in_fmt == input_format
+        if in_fmt == input_format.lower().lstrip('.')
     ])
+
 
 def get_input_formats_for_output(output_format: str) -> list:
     """Возвращает возможные входные форматы для выходного"""
     return sorted([
         in_fmt for in_fmt, out_fmt in SUPPORTED_CONVERSIONS.keys()
-        if out_fmt == output_format
+        if out_fmt == output_format.lower().lstrip('.')
     ])
+
 
 def can_convert(input_format: str, output_format: str) -> bool:
     """Проверяет, возможна ли конвертация"""
-    return (input_format, output_format) in SUPPORTED_CONVERSIONS
+    return (input_format.lower().lstrip('.'), output_format.lower().lstrip('.')) in SUPPORTED_CONVERSIONS
+
 
 def get_converter_class(input_format: str, output_format: str) -> str:
     """Возвращает имя класса конвертера для указанных форматов"""
-    return SUPPORTED_CONVERSIONS.get((input_format, output_format))
+    return SUPPORTED_CONVERSIONS.get((input_format.lower().lstrip('.'), output_format.lower().lstrip('.')))

@@ -34,6 +34,26 @@ from loguru import logger
 class ConverterFactory:
     """Фабрика для создания конвертеров"""
 
+    # Словарь маппинга имен классов на сами классы
+    _CONVERTER_MAP = {
+        'DocxToPdfConverter': DocxToPdfConverter,
+        'PptxToPdfConverter': PptxToPdfConverter,
+        'ImageConverter': ImageConverter,
+        'PdfToPptxConverter': PdfToPptxConverter,
+        'PdfToDocxConverter': PdfToDocxConverter,
+        'PdfToTextConverter': PdfToTextConverter,
+        'PdfToImageConverter': PdfToImageConverter,
+        'PdfCompressor': PdfCompressor,
+        'PdfToSpreadsheetConverter': PdfToSpreadsheetConverter,
+        'PdfToHtmlConverter': PdfToHtmlConverter,
+        'PdfToJsonConverter': PdfToJsonConverter,
+        'PdfToXmlConverter': PdfToXmlConverter,
+        'PdfToMarkdownConverter': PdfToMarkdownConverter,
+        'SpreadsheetConverter': SpreadsheetConverter,
+        'TextDocumentConverter': TextDocumentConverter,
+        'HeicConverter': HeicConverter,
+    }
+
     @classmethod
     def get_converter(cls, input_ext: str, output_ext: str, **kwargs) -> Optional[BaseConverter]:
         """
@@ -47,20 +67,30 @@ class ConverterFactory:
             logger.warning(f"Конвертация {input_ext} -> {output_ext} не поддерживается")
             return None
 
-        # Создаем конвертер
-        converter_class = get_converter_class(input_ext, output_ext)
+        # Получаем имя класса конвертера
+        converter_class_name = get_converter_class(input_ext, output_ext)
 
-        # Word документы в PDF
-        if converter_class == 'DocxToPdfConverter':
-            return DocxToPdfConverter()
+        # Получаем класс из словаря
+        converter_class = cls._CONVERTER_MAP.get(converter_class_name)
 
-        # PowerPoint в PDF
-        elif converter_class == 'PptxToPdfConverter':
-            return PptxToPdfConverter()
+        if not converter_class:
+            logger.error(f"Неизвестный конвертер: {converter_class_name}")
+            return None
 
-        # Изображения
-        elif converter_class == 'ImageConverter':
-            converter = ImageConverter()
+        # Создаем экземпляр
+        converter = converter_class()
+
+        # Применяем параметры конфигурации
+        cls._apply_converter_settings(converter, converter_class_name, kwargs)
+
+        return converter
+
+    @classmethod
+    def _apply_converter_settings(cls, converter: BaseConverter, converter_class_name: str, kwargs: dict):
+        """Применяет настройки к конвертеру"""
+
+        # Настройки для ImageConverter
+        if converter_class_name == 'ImageConverter':
             if 'quality' in kwargs:
                 converter.set_quality(kwargs['quality'])
             if 'max_width' in kwargs or 'max_height' in kwargs:
@@ -68,87 +98,41 @@ class ConverterFactory:
                     kwargs.get('max_width'),
                     kwargs.get('max_height')
                 )
-            return converter
 
-        # PDF в PPTX/PPT
-        elif converter_class == 'PdfToPptxConverter':
-            converter = PdfToPptxConverter()
+        # Настройки для PdfToPptxConverter
+        elif converter_class_name == 'PdfToPptxConverter':
             if 'dpi' in kwargs:
                 converter.dpi = kwargs['dpi']
             if 'quality' in kwargs:
                 converter.quality = kwargs['quality']
-            return converter
 
-        # PDF в DOCX
-        elif converter_class == 'PdfToDocxConverter':
-            converter = PdfToDocxConverter()
+        # Настройки для PdfToDocxConverter
+        elif converter_class_name == 'PdfToDocxConverter':
             if 'extract_text_only' in kwargs:
                 converter.set_extract_text_only(kwargs['extract_text_only'])
-            return converter
 
-        # PDF в TXT
-        elif converter_class == 'PdfToTextConverter':
-            return PdfToTextConverter()
-
-        # PDF в изображения
-        elif converter_class == 'PdfToImageConverter':
-            converter = PdfToImageConverter()
+        # Настройки для PdfToImageConverter
+        elif converter_class_name == 'PdfToImageConverter':
             if 'quality' in kwargs:
                 converter.set_quality(kwargs['quality'])
             if 'dpi' in kwargs:
                 converter.set_dpi(kwargs['dpi'])
             if 'page_range' in kwargs:
                 converter.set_page_range(kwargs['page_range'])
-            return converter
 
-        # Сжатие PDF
-        elif converter_class == 'PdfCompressor':
-            converter = PdfCompressor()
+        # Настройки для PdfCompressor
+        elif converter_class_name == 'PdfCompressor':
             if 'compression_level' in kwargs:
                 converter.set_compression(kwargs['compression_level'])
             if 'remove_metadata' in kwargs:
                 converter.set_remove_metadata(kwargs['remove_metadata'])
             if 'optimize_images' in kwargs:
                 converter.set_optimize_images(kwargs['optimize_images'])
-            return converter
 
-        # PDF в таблицы
-        elif converter_class == 'PdfToSpreadsheetConverter':
-            return PdfToSpreadsheetConverter()
-
-        # PDF в HTML
-        elif converter_class == 'PdfToHtmlConverter':
-            return PdfToHtmlConverter()
-
-        # PDF в JSON
-        elif converter_class == 'PdfToJsonConverter':
-            return PdfToJsonConverter()
-
-        # PDF в XML
-        elif converter_class == 'PdfToXmlConverter':
-            return PdfToXmlConverter()
-
-        # PDF в Markdown
-        elif converter_class == 'PdfToMarkdownConverter':
-            return PdfToMarkdownConverter()
-
-        # Таблицы (Excel, CSV)
-        elif converter_class == 'SpreadsheetConverter':
-            return SpreadsheetConverter()
-
-        # Текстовые документы (ODT, RTF)
-        elif converter_class == 'TextDocumentConverter':
-            return TextDocumentConverter()
-
-        # HEIC изображения
-        elif converter_class == 'HeicConverter':
-            converter = HeicConverter()
+        # Настройки для HeicConverter
+        elif converter_class_name == 'HeicConverter':
             if 'quality' in kwargs:
                 converter.set_quality(kwargs['quality'])
-            return converter
-        
-        logger.error(f"Неизвестный конвертер: {converter_class}")
-        return None
 
     @classmethod
     def get_supported_conversions(cls) -> list[tuple[str, str]]:

@@ -19,6 +19,7 @@ from src.converters.factory import ConverterFactory
 from src.core.job_manager import JobManager, ConversionJob, JobStatus
 from src.core.settings import Settings
 from src.utils.helpers import get_file_size_str, get_unique_filename, ensure_output_directory
+from loguru import logger
 
 
 class ConversionWorker(QThread):
@@ -44,16 +45,30 @@ class MainWindow(QMainWindow):
     show_warning_signal = Signal(str, str)
     show_error_signal = Signal(str, str)
 
+    # Сигналы для обновления UI из рабочих потоков
+    update_file_item_signal = Signal(str, int)  # file_path, progress
+    update_status_signal = Signal()
+
     def __init__(self):
         super().__init__()
         self.settings = Settings()
         self.job_manager = JobManager(max_concurrent=self.settings.get('max_concurrent_jobs', 3))
         self.worker = ConversionWorker(self.job_manager)
 
+        # Единый таймер для обновления статуса
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.update_status)
+        self.status_timer.setInterval(500)  # 500ms для плавности
+
+        # Флаг для блокировки повторного запуска
+        self.conversion_in_progress = False
+
         # Подключаем сигналы
         self.show_info_signal.connect(self._show_info_message)
         self.show_warning_signal.connect(self._show_warning_message)
         self.show_error_signal.connect(self._show_error_message)
+        self.update_file_item_signal.connect(self._update_file_item_progress)
+        self.update_status_signal.connect(self._update_status_forced)
 
         self.setup_ui()
         self.setup_callbacks()
@@ -75,6 +90,25 @@ class MainWindow(QMainWindow):
     def _show_error_message(self, title: str, message: str):
         """Безопасно показывает ошибку"""
         QMessageBox.critical(self, title, message)
+
+    @Slot(str, int)
+    def _update_file_item_progress(self, file_path: str, progress: int):
+        """Обновляет прогресс в элементе списка (вызывается из сигнала)"""
+        for i in range(self.file_list.count()):
+            item = self.file_list.item(i)
+            item_path = item.data(Qt.ItemDataRole.UserRole)
+            if item_path == file_path:
+                old_text = item.text()
+                # Убираем старый прогресс если есть
+                if ' (' in old_text and '%)' in old_text:
+                    old_text = old_text.split(' (')[0]
+                item.setText(f"{old_text} ({progress}%)")
+                break
+
+    @Slot()
+    def _update_status_forced(self):
+        """Принудительное обновление статуса"""
+        self.update_status()
 
     def setup_ui(self):
         """Настраивает интерфейс"""
@@ -380,6 +414,10 @@ class MainWindow(QMainWindow):
         self.max_jobs_spin = QSpinBox()
         self.max_jobs_spin.setRange(1, 10)
         self.max_jobs_spin.setValue(self.settings.get('max_concurrent_jobs', 3))
+
+        # Обновляем менеджер при изменении
+        self.max_jobs_spin.valueChanged.connect(self._update_max_concurrent)
+
         max_jobs_layout.addWidget(self.max_jobs_spin)
         max_jobs_layout.addStretch()
         general_layout.addLayout(max_jobs_layout)
@@ -470,6 +508,10 @@ class MainWindow(QMainWindow):
 
         self.show_info_signal.emit("Успех", "Настройки сохранены!")
 
+    def _update_max_concurrent(self, value: int):
+        """Обновляет максимальное количество одновременных задач"""
+        self.job_manager.max_concurrent = value
+
     def on_input_format_changed(self, format_name: str):
         """Обработчик изменения входного формата"""
         if format_name == 'Все' or not format_name:
@@ -532,6 +574,11 @@ class MainWindow(QMainWindow):
 
     def update_convert_button(self):
         """Обновляет состояние кнопки конвертации"""
+        # Если конвертация уже идет, не даем нажать
+        if self.conversion_in_progress:
+            self.convert_btn.setEnabled(False)
+            return
+
         has_files = self.file_list.count() > 0
         has_format = self.input_format_combo.currentText() != 'Все' and self.input_format_combo.currentText()
         has_output = bool(self.output_format_combo.currentText())
@@ -775,55 +822,67 @@ class MainWindow(QMainWindow):
             )
             return
 
+        # Блокируем кнопку и запускаем таймер
+        self.conversion_in_progress = True
         self.convert_btn.setEnabled(False)
         self.status_label.setText(f"Конвертация запущена ({added_count} файлов)")
 
-        self.status_timer = QTimer()
-        self.status_timer.timeout.connect(self.update_status)
-        self.status_timer.start(1000)
+        # Запускаем таймер если еще не запущен
+        if not self.status_timer.isActive():
+            self.status_timer.start()
 
     def update_status(self):
         """Обновляет статус"""
         active = self.job_manager.get_active_jobs_count()
         jobs = self.job_manager.get_all_jobs()
+
+        if not jobs:
+            return
+
         total = len(jobs)
-        completed = sum(1 for job in jobs if job.status == JobStatus.COMPLETED)
+        completed = sum(1 for job in jobs if job.get_status() == JobStatus.COMPLETED)
+        failed = sum(1 for job in jobs if job.get_status() == JobStatus.FAILED)
 
         # Считаем средний прогресс
         if total > 0:
-            total_progress = sum(job.progress for job in jobs) // total
+            total_progress = sum(job.get_progress() for job in jobs) // total
             self.total_progress.setValue(total_progress)
 
         self.status_label.setText(f"Активных: {active}, Завершено: {completed}/{total}")
         self.active_jobs_label.setText(f"Активных: {active}")
 
-        if completed == total and total > 0:
+        # Проверяем завершение всех задач
+        active_jobs = [j for j in jobs if j.get_status() in [JobStatus.PENDING, JobStatus.PROCESSING]]
+
+        if not active_jobs and total > 0:
             self.status_timer.stop()
-            self.convert_btn.setEnabled(True)
-            self.status_label.setText("Конвертация завершена!")
+            self.conversion_in_progress = False
+            self.update_convert_button()
+            self.status_label.setText(f"Конвертация завершена! ({completed} успешно, {failed} с ошибками)")
             self.total_progress.setValue(100)
             self.active_jobs_label.setText("Активных: 0")
-
-            # Очищаем список задач
-            self.job_manager.jobs.clear()
 
             # Очищаем список файлов от прогресса
             for i in range(self.file_list.count()):
                 item = self.file_list.item(i)
                 text = item.text()
-                if '%' in text:
+                if ' (' in text and '%)' in text:
                     text = text.split(' (')[0]
                     item.setText(text)
 
-            if self.settings.get('auto_open_folder', True):
+            if self.settings.get('auto_open_folder', True) and completed > 0:
                 import subprocess
                 output_dir = self.settings.get('output_directory')
-                if sys.platform == 'win32':
-                    subprocess.Popen(f'explorer "{output_dir}"')
-                elif sys.platform == 'darwin':
-                    subprocess.Popen(['open', output_dir])
-                else:
-                    subprocess.Popen(['xdg-open', output_dir])
+                if output_dir:
+                    try:
+                        if sys.platform == 'win32':
+                            subprocess.Popen(f'explorer "{output_dir}"', shell=True)
+                        elif sys.platform == 'darwin':
+                            subprocess.Popen(['open', output_dir])
+                        else:
+                            subprocess.Popen(['xdg-open', output_dir])
+                    except Exception as e:
+                        logger.error(f"Не удалось открыть папку: {e}")
 
     def on_job_started(self, job: ConversionJob):
         """Обработчик начала задачи"""
@@ -833,30 +892,10 @@ class MainWindow(QMainWindow):
         )
 
     def on_job_progress(self, job: ConversionJob):
-        """Обработчик прогресса задачи - безопасное обновление"""
-
-        # Используем сигнал для безопасного обновления UI из другого потока
-        def update_ui():
-            try:
-                # Обновляем элемент в списке
-                for i in range(self.file_list.count()):
-                    item = self.file_list.item(i)
-                    file_path = Path(item.data(Qt.ItemDataRole.UserRole))
-                    if file_path == job.input_path:
-                        old_text = item.text()
-                        if '%' in old_text:
-                            old_text = old_text.split(' (')[0]
-                        item.setText(f"{old_text} ({job.progress}%)")
-                        break
-
-                # Обновляем общий прогресс
-                self.update_status()
-            except Exception as e:
-                logger.error(f"Ошибка обновления UI: {e}")
-
-        # Вызываем через QTimer для безопасного обновления
-        from PySide6.QtCore import QTimer
-        QTimer.singleShot(0, update_ui)
+        """Обработчик прогресса задачи"""
+        # Используем сигнал для безопасного обновления UI
+        self.update_file_item_signal.emit(str(job.input_path), job.get_progress())
+        self.update_status_signal.emit()
 
     def on_job_completed(self, job: ConversionJob):
         """Обработчик завершения задачи"""
@@ -871,6 +910,8 @@ class MainWindow(QMainWindow):
                 f"Файл {job.input_path.name} успешно сконвертирован!"
             )
 
+        self.update_status_signal.emit()
+
     def on_job_failed(self, job: ConversionJob):
         """Обработчик ошибки задачи"""
         self.log_text.append(f"❌ Ошибка: {job.input_path.name} - {job.error_message}")
@@ -883,6 +924,8 @@ class MainWindow(QMainWindow):
                 "Ошибка конвертации",
                 f"Не удалось сконвертировать {job.input_path.name}\n\n{job.error_message}"
             )
+
+        self.update_status_signal.emit()
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         """Обработчик перетаскивания файлов"""
@@ -902,6 +945,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Обработчик закрытия окна"""
+        self.status_timer.stop()
         self.job_manager.stop()
         self.worker.quit()
         self.worker.wait()

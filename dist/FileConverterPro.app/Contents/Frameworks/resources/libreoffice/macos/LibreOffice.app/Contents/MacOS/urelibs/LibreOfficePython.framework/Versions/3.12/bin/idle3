@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+origpath=$(pwd)
+bindir=$(cd $(dirname "$0") ; pwd)
+cd "$origpath"
+"$bindir/../Resources/Python.app/Contents/MacOS/LibreOfficePython" - $@ <<EOF
+
+from idlelib.pyshell import main
+if __name__ == '__main__':
+    main()
+EOF

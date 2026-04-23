@@ -96,7 +96,7 @@ def install_requirements():
         pip_flags.append('--break-system-packages')
 
     # Устанавливаем зависимости
-    cmd = [sys.executable, '-m', 'pip', 'install'] + pip_flags + ['-r', 'requirements.txt']
+    cmd = [sys.executable, '-m', 'pip', 'install'] + pip_flags + ['-r', str(req_file)]
 
     return run_command(cmd, "Установка Python пакетов")
 
@@ -104,46 +104,54 @@ def install_requirements():
 def check_python_packages():
     """Проверяет наличие всех необходимых Python пакетов"""
     required = [
-        'PySide6', 'loguru', 'PIL', 'fitz', 'docx', 'pptx',
-        'openpyxl', 'pdfplumber', 'camelot', 'tabula', 'pandas'
+        'PySide6', 'loguru', 'PIL', 'docx', 'pptx',
+        'openpyxl', 'pdfplumber', 'pandas'
     ]
 
     # Опциональные пакеты
-    optional = ['pdf2image', 'pdf2docx', 'pypdf']
+    optional = {
+        'fitz': 'Быстрая работа с PDF (PyMuPDF)',
+        'pdf2image': 'Конвертация PDF в изображения',
+        'pdf2docx': 'Конвертация PDF в DOCX с форматированием',
+        'pyheif': 'Конвертация HEIC (iPhone фото)',
+        'camelot': 'Извлечение таблиц из PDF (Camelot)',
+        'tabula': 'Извлечение таблиц из PDF (Tabula)',
+    }
 
     missing = []
-    optional_missing = []
+    optional_missing = {}
 
     for package in required:
         try:
             if package == 'PIL':
                 __import__('PIL')
-            elif package == 'fitz':
-                __import__('fitz')
             elif package == 'docx':
                 __import__('docx')
             elif package == 'pptx':
                 __import__('pptx')
-            elif package == 'camelot':
-                __import__('camelot')
-            elif package == 'tabula':
-                __import__('tabula')
+            elif package == 'fitz':
+                __import__('fitz')
             else:
                 __import__(package)
         except ImportError:
             missing.append(package)
 
-    for package in optional:
+    for package, desc in optional.items():
         try:
-            __import__(package)
+            if package == 'fitz':
+                __import__('fitz')
+            elif package == 'pyheif':
+                __import__('pyheif')
+            else:
+                __import__(package)
         except ImportError:
-            optional_missing.append(package)
+            optional_missing[package] = desc
 
     return missing, optional_missing
 
 
 def check_libreoffice_installed():
-    """Проверяет, установлен ли LibreOffice и работает ли"""
+    """Проверяет, установлен ли LibreOffice"""
     import shutil
     import platform
 
@@ -155,9 +163,10 @@ def check_libreoffice_installed():
                 Path('C:/Program Files (x86)/LibreOffice/program/soffice.exe').exists():
             return True
     elif system == 'darwin':
-        if Path('/Applications/LibreOffice.app').exists():
+        if Path('/Applications/LibreOffice.app').exists() or \
+                Path('/opt/homebrew/bin/soffice').exists():
             return True
-    else:  # linux
+    else:
         if shutil.which('libreoffice') or shutil.which('soffice'):
             return True
 
@@ -192,43 +201,51 @@ def install_libreoffice():
         return False
 
 
-def install_poppler():
-    """Устанавливает poppler для pdf2image"""
-    os_name = get_os()
-
-    print("\n📦 Установка poppler...")
-
-    if os_name == 'darwin':
-        if shutil.which('brew'):
-            result = subprocess.run(['brew', 'install', 'poppler'], capture_output=True)
-            if result.returncode == 0:
-                print("✅ poppler установлен через Homebrew")
-                return True
-            else:
-                print("❌ Не удалось установить poppler через Homebrew")
-                return False
+def install_system_libreoffice_linux():
+    """Установка LibreOffice через apt (запасной вариант)"""
+    print("📦 Установка LibreOffice через apt...")
+    try:
+        subprocess.run(['sudo', 'apt', 'update'], capture_output=True)
+        result = subprocess.run(['sudo', 'apt', 'install', '-y', 'libreoffice'], capture_output=True)
+        if result.returncode == 0:
+            print("✅ LibreOffice установлен через apt")
+            return True
         else:
-            print("⚠️  Homebrew не найден. Установите poppler вручную:")
-            print("   brew install poppler")
-            return False
-
-    elif os_name == 'linux':
-        try:
-            subprocess.run(['sudo', 'apt-get', 'update'], capture_output=True)
-            result = subprocess.run(['sudo', 'apt-get', 'install', '-y', 'poppler-utils'], capture_output=True)
-            if result.returncode == 0:
-                print("✅ poppler установлен через apt")
-                return True
-        except:
-            pass
+            # Пробуем исправить сломанные зависимости
+            print("⚠️ Пробуем исправить зависимости...")
+            subprocess.run(['sudo', 'apt', '--fix-broken', 'install', '-y'], capture_output=True)
+            # Повторная попытка
+            result2 = subprocess.run(['sudo', 'apt', 'install', '-y', 'libreoffice'], capture_output=True)
+            return result2.returncode == 0
+    except Exception as e:
+        print(f"❌ Ошибка: {e}")
         return False
 
-    else:  # windows
-        print("⚠️  Для Windows установите poppler вручную:")
-        print("   1. Скачайте с https://github.com/oschwartz10612/poppler-windows/releases/")
-        print("   2. Распакуйте в C:/Program Files/poppler")
-        print("   3. Добавьте C:/Program Files/poppler/bin в PATH")
-        return False
+
+def install_optional_packages(optional_missing: dict):
+    """Устанавливает опциональные пакеты с согласия пользователя"""
+    if not optional_missing:
+        return
+
+    print("\n" + "-" * 60)
+    print("  Опциональные пакеты")
+    print("-" * 60)
+
+    os_name = get_os()
+    pip_flags = []
+    if os_name in ['macos', 'linux']:
+        pip_flags = ['--break-system-packages']
+
+    for pkg, desc in optional_missing.items():
+        print(f"\n⚠️  {desc}")
+        response = get_user_input(f"   Установить пакет '{pkg}'? (y/n): ", 'n')
+
+        if response == 'y':
+            cmd = [sys.executable, '-m', 'pip', 'install'] + pip_flags + [pkg]
+            if run_command(cmd, f"Установка {pkg}", show_output=False):
+                print(f"   ✅ {pkg} установлен")
+            else:
+                print(f"   ❌ Не удалось установить {pkg}")
 
 
 def show_manual_instructions(missing_packages):
@@ -282,7 +299,8 @@ def main():
         print("\n✅ Все основные пакеты установлены")
 
     # 2. Проверяем установку Python пакетов
-    missing, optional = check_python_packages()
+    missing, optional_missing = check_python_packages()
+
     if missing:
         print(f"\n⚠️  Отсутствуют обязательные пакеты: {', '.join(missing)}")
         show_manual_instructions(missing)
@@ -290,42 +308,42 @@ def main():
         if response != 'y':
             sys.exit(1)
 
-    if optional:
-        print(f"\nℹ️  Опциональные пакеты (не обязательны): {', '.join(optional)}")
-        print("   Некоторые функции могут быть недоступны")
-
-    # 3. Проверяем poppler для PDF в изображения
-    print("\n" + "-" * 60)
-    try:
-        from pdf2image import convert_from_path
-        print("✅ pdf2image готов к работе")
-    except ImportError:
-        print("⚠️  pdf2image не установлен (конвертация PDF в изображения будет недоступна)")
+    # 3. Предлагаем установить опциональные пакеты
+    if optional_missing:
+        install_optional_packages(optional_missing)
 
     # 4. Проверяем и устанавливаем LibreOffice
     print("\n" + "-" * 60)
     if not check_libreoffice_installed():
         print("\n⚠️  LibreOffice не найден!")
 
-        response = get_user_input("\nУстановить LibreOffice автоматически? (y/n): ", 'y')
-        if response == 'y':
-            if not install_libreoffice():
-                print("\n❌ Не удалось установить LibreOffice автоматически")
-                print("\nУстановите LibreOffice вручную:")
-                if os_name == 'darwin':
-                    print("  brew install --cask libreoffice")
-                elif os_name == 'windows':
-                    print("  https://www.libreoffice.org/download/")
-                else:
-                    print("  sudo apt install libreoffice")
-
-                response2 = get_user_input("\nПродолжить без LibreOffice? (y/n): ", 'y')
-                if response2 != 'y':
-                    sys.exit(1)
-            else:
+        # Для Linux пробуем системную установку
+        if os_name == 'linux':
+            if install_system_libreoffice_linux():
                 print("\n✅ LibreOffice успешно установлен!")
+            else:
+                response = get_user_input("\nУстановить LibreOffice через скрипт? (y/n): ", 'y')
+                if response == 'y':
+                    if not install_libreoffice():
+                        print("\n❌ Не удалось установить LibreOffice")
         else:
-            print("\nПродолжаем без LibreOffice (конвертация документов будет недоступна)")
+            response = get_user_input("\nУстановить LibreOffice автоматически? (y/n): ", 'y')
+            if response == 'y':
+                if not install_libreoffice():
+                    print("\n❌ Не удалось установить LibreOffice автоматически")
+                    print("\nУстановите LibreOffice вручную:")
+                    if os_name == 'darwin':
+                        print("  brew install --cask libreoffice")
+                    elif os_name == 'windows':
+                        print("  https://www.libreoffice.org/download/")
+                    else:
+                        print("  sudo apt install libreoffice")
+
+                    response2 = get_user_input("\nПродолжить без LibreOffice? (y/n): ", 'y')
+                    if response2 != 'y':
+                        sys.exit(1)
+            else:
+                print("\nПродолжаем без LibreOffice (конвертация документов будет недоступна)")
     else:
         print("\n✅ LibreOffice найден")
 
