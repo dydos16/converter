@@ -25,3 +25,4 @@ venv/
 *.tmp
 .DS_Store
 temp_download/
+releases/
