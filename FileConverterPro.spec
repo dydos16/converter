@@ -1,16 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all
+
+datas = [('src', 'src')]
+binaries = []
+hiddenimports = ['PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets', 'loguru', 'PIL._tkinter_finder']
+tmp_ret = collect_all('loguru')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['run.py'],
     pathex=[],
-    binaries=[],
-    datas=[('src', 'src'), ('resources', 'resources'), ('download_libreoffice.py', '.')],
-    hiddenimports=['PySide6', 'fitz', 'docx', 'pptx', 'openpyxl', 'pdfplumber', 'PIL', 'loguru'],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['tkinter', 'matplotlib', 'PyQt5', 'PyQt6'],
     noarchive=False,
     optimize=0,
 )
