@@ -1,23 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
-
-datas = [('src', 'src')]
-binaries = []
-hiddenimports = ['PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets', 'loguru', 'PIL._tkinter_finder']
-tmp_ret = collect_all('loguru')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
     ['run.py'],
     pathex=[],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[],
+    datas=[('src', 'src')],
+    hiddenimports=['PySide6.QtCore', 'PySide6.QtGui', 'PySide6.QtWidgets', 'loguru'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'PyQt5', 'PyQt6'],
+    excludes=['tkinter', 'matplotlib', 'numpy', 'scipy', 'cv2', 'cffi', 'cryptography', 'pandas.tests', 'PyQt5', 'PyQt6', 'pytest', 'setuptools', 'pip'],
     noarchive=False,
     optimize=0,
 )

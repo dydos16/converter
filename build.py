@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-"""
-Сборка File Converter Pro
-"""
+"""Сборка File Converter Pro — минимальный размер"""
 import sys, shutil, subprocess
 from pathlib import Path
 
@@ -11,81 +9,60 @@ DIST = PROJECT / "dist"
 BUILD = PROJECT / "build"
 NAME = "FileConverterPro"
 
-GREEN, RED, CYAN, END = "\033[92m", "\033[91m", "\033[96m", "\033[0m"
 PIP_FLAGS = ["--break-system-packages"] if SYSTEM in ["darwin", "linux"] else []
+SEP = ";" if SYSTEM == "windows" else ":"
 
-def ok(msg): print(f"{GREEN}✅ {msg}{END}")
-def err(msg): print(f"{RED}❌ {msg}{END}")
-def info(msg): print(f"{CYAN}📦 {msg}{END}")
+def ok(msg): print(f"\033[92m✅ {msg}\033[0m")
+def info(msg): print(f"\033[96m📦 {msg}\033[0m")
 
-def pip_install(pkg):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", pkg] + PIP_FLAGS)
+# Очистка
+for d in [DIST, BUILD]: shutil.rmtree(d, ignore_errors=True)
+for f in PROJECT.glob("*.spec"): f.unlink(missing_ok=True)
 
-def step1_clean():
+# __init__.py
+for d in ["src", "src/gui", "src/core", "src/converters", "src/config", "src/utils"]:
+    (PROJECT / d / "__init__.py").touch(exist_ok=True)
+
+# Ставим pyinstaller
+subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"] + PIP_FLAGS)
+
+info("Сборка...")
+
+subprocess.check_call([
+    sys.executable, "-m", "PyInstaller",
+    "--onedir", "--windowed",
+    "--name", NAME,
+    "--add-data", f"src{SEP}src",
+    "--hidden-import", "PySide6.QtCore",
+    "--hidden-import", "PySide6.QtGui",
+    "--hidden-import", "PySide6.QtWidgets",
+    "--hidden-import", "loguru",
+    "--exclude-module", "tkinter",
+    "--exclude-module", "matplotlib",
+    "--exclude-module", "numpy",
+    "--exclude-module", "scipy",
+    "--exclude-module", "cv2",
+    "--exclude-module", "cffi",
+    "--exclude-module", "cryptography",
+    "--exclude-module", "pandas.tests",
+    "--exclude-module", "PyQt5",
+    "--exclude-module", "PyQt6",
+    "--exclude-module", "pytest",
+    "--exclude-module", "setuptools",
+    "--exclude-module", "pip",
+    "run.py"
+])
+
+app = DIST / f"{NAME}.app"
+if app.exists():
+    # Очистка кеша внутри .app
     info("Очистка...")
-    for d in [DIST, BUILD]: shutil.rmtree(d, ignore_errors=True)
-    for f in PROJECT.glob("*.spec"): f.unlink(missing_ok=True)
-    ok("Очищено")
-
-def step2_patch():
-    info("Проверка...")
-    for d in ["src", "src/gui", "src/core", "src/converters", "src/config", "src/utils"]:
-        (PROJECT / d / "__init__.py").touch(exist_ok=True)
-    ok("Готово")
-
-def step3_build():
-    info(f"Сборка ({SYSTEM})...")
-    pip_install("pyinstaller")
+    for junk in ["__pycache__", "*.pyc", "tests", "test", "docs", "examples"]:
+        for p in app.rglob(junk):
+            try:
+                if p.is_file(): p.unlink()
+                elif p.is_dir(): shutil.rmtree(p, ignore_errors=True)
+            except: pass
     
-    sep = ";" if SYSTEM == "windows" else ":"
-    
-    cmd = [
-        sys.executable, "-m", "PyInstaller",
-        "--onedir", "--windowed",
-        "--name", NAME,
-        "--add-data", f"src{sep}src",
-        "--hidden-import", "PySide6.QtCore",
-        "--hidden-import", "PySide6.QtGui",
-        "--hidden-import", "PySide6.QtWidgets",
-        "--hidden-import", "loguru",
-        "--hidden-import", "PIL._tkinter_finder",
-        "--collect-all", "loguru",
-        "--exclude-module", "tkinter",
-        "--exclude-module", "matplotlib",
-        "--exclude-module", "PyQt5",
-        "--exclude-module", "PyQt6",
-        "run.py"
-    ]
-    
-    subprocess.check_call(cmd)
-    
-    app = DIST / f"{NAME}.app" if SYSTEM == "darwin" else DIST / f"{NAME}"
-    if app.exists():
-        ok(f"Собрано: {app}")
-        return app
-    err("Провал")
-    return None
-
-def main():
-    print("=" * 60)
-    print(f"  🔧 Сборка {NAME} ({SYSTEM})")
-    print("=" * 60)
-    
-    step1_clean()
-    step2_patch()
-    app = step3_build()
-    
-    if app and app.exists():
-        size_mb = sum(p.stat().st_size for p in app.rglob("*") if p.is_file()) / 1024 / 1024
-        print(f"\n{'='*60}")
-        print(f"  🎉 {NAME} готов!")
-        print(f"{'='*60}")
-        print(f"  Размер: {size_mb:.0f} MB")
-        print(f"  Файл: {GREEN}{app}{END}")
-        print(f"\n  Запуск: {CYAN}open {app}{END}")
-        print(f"{'='*60}")
-    else:
-        err("Сборка провалилась.")
-
-if __name__ == "__main__":
-    main()
+    size = sum(p.stat().st_size for p in app.rglob("*") if p.is_file()) / 1024/1024
+    ok(f"Готово: {app} ({size:.0f} MB)")
