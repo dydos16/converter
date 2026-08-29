@@ -12,7 +12,7 @@ class Settings:
 
     DEFAULT_SETTINGS = {
         # Общие настройки
-        'theme': 'dark',
+        'theme': 'system',
         'max_concurrent_jobs': 4,
         'output_directory': str(Path.home() / 'Downloads'),
         'auto_open_folder': True,
@@ -43,7 +43,8 @@ class Settings:
 
     def __init__(self, config_path: Optional[Path] = None):
         if config_path is None:
-            config_path = Path.home() / '.config' / 'file-converter' / 'settings.json'
+            from src.utils.helpers import get_config_dir
+            config_path = get_config_dir() / 'settings.json'
 
         self.config_path = config_path
         self.settings = self.DEFAULT_SETTINGS.copy()

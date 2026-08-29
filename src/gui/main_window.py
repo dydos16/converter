@@ -10,14 +10,17 @@ from PySide6.QtWidgets import (
     QComboBox, QProgressBar, QFileDialog, QMessageBox,
     QGroupBox, QCheckBox, QSpinBox, QSlider,
     QTabWidget, QTextEdit, QApplication, QMenu,
-    QSplitter, QFrame, QGridLayout, QScrollArea
+    QSplitter, QFrame, QGridLayout, QScrollArea,
+    QGraphicsDropShadowEffect, QSizePolicy
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QAction
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFont, QAction, QColor
 
 from src.converters.factory import ConverterFactory
 from src.core.job_manager import JobManager, ConversionJob, JobStatus
+from src.core.libreoffice_manager import LibreOfficeManager
 from src.core.settings import Settings
+from src.gui.styles import get_stylesheet_for, get_palette_for
 from src.utils.helpers import get_file_size_str, get_unique_filename, ensure_output_directory
 from loguru import logger
 
@@ -53,6 +56,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = Settings()
         self.job_manager = JobManager(max_concurrent=self.settings.get('max_concurrent_jobs', 3))
+        self.libreoffice_manager = LibreOfficeManager()
+        self.libreoffice_manager.status_changed.connect(self._on_libreoffice_status_changed)
+        self.libreoffice_manager.install_progress.connect(self._on_libreoffice_install_progress)
+        self.libreoffice_manager.install_finished.connect(self._on_libreoffice_install_finished)
         self.worker = ConversionWorker(self.job_manager)
 
         # Единый таймер для обновления статуса
@@ -73,6 +80,7 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.setup_callbacks()
         self.load_settings()
+        self.apply_theme_from_settings()
 
         self.worker.start()
 
@@ -110,6 +118,74 @@ class MainWindow(QMainWindow):
         """Принудительное обновление статуса"""
         self.update_status()
 
+    @Slot(str, bool)
+    def _on_libreoffice_status_changed(self, message: str, is_available: bool):
+        """Обновляет индикатор статуса LibreOffice в статус-баре"""
+        self.libreoffice_status_label.setText(message)
+        if is_available:
+            self.libreoffice_status_label.setStyleSheet("color: #4CAF50;")  # зелёный
+            self.status_progress_bar.hide()
+        else:
+            self.libreoffice_status_label.setStyleSheet("color: #ef5350;")  # красный
+
+    @Slot(int, str)
+    def _on_libreoffice_install_progress(self, percent: int, message: str):
+        """Обновляет прогресс автоматической установки LibreOffice."""
+        self.libreoffice_status_label.setText(message[:40])
+        self.status_progress_bar.setValue(percent)
+        self.status_progress_bar.show()
+
+    @Slot(bool, str)
+    def _on_libreoffice_install_finished(self, success: bool, message: str):
+        """Обрабатывает завершение установки LibreOffice."""
+        if success:
+            self.status_progress_bar.hide()
+            self.libreoffice_status_label.setText("LibreOffice готов")
+            self.libreoffice_status_label.setStyleSheet("color: #4CAF50;")
+        else:
+            self.status_progress_bar.setValue(0)
+            self.status_progress_bar.hide()
+            self.libreoffice_status_label.setText("LibreOffice недоступен")
+            self.libreoffice_status_label.setStyleSheet("color: #ef5350;")
+
+    def maybe_start_libreoffice_install(self):
+        """Запускает автоустановку LibreOffice при его отсутствии (не блокирует GUI)."""
+        if not self.libreoffice_manager.is_available():
+            # Даём GUI отрисоваться, затем запускаем загрузку в фоне
+            QTimer.singleShot(500, self.libreoffice_manager.start_auto_install)
+
+    def apply_theme(self, mode: str):
+        """
+        Применяет тему ('system'|'light'|'dark') ко всему приложению.
+        В режиме 'system' тема определяется автоматически по ОС.
+        """
+        self.settings.set('theme', mode)
+        app = QApplication.instance()
+        if app is None:
+            return
+        app.setPalette(get_palette_for(mode))
+        app.setStyleSheet(get_stylesheet_for(mode))
+
+    def apply_theme_from_settings(self):
+        """Применяет тему из сохранённых настроек при запуске."""
+        mode = self.settings.get('theme', 'system')
+        app = QApplication.instance()
+        if app is not None:
+            app.setPalette(get_palette_for(mode))
+            app.setStyleSheet(get_stylesheet_for(mode))
+
+    def on_theme_changed(self, mode: str):
+        """Обработчик смены темы в настройках — применяет сразу."""
+        self.apply_theme(mode)
+
+    def _add_glow(self, widget, color: QColor, blur: int = 24, offset: int = 0):
+        """Добавляет мягкое свечение (glow) вокруг виджета через QGraphicsDropShadowEffect."""
+        effect = QGraphicsDropShadowEffect(widget)
+        effect.setBlurRadius(blur)
+        effect.setOffset(offset, offset)
+        effect.setColor(color)
+        widget.setGraphicsEffect(effect)
+
     def setup_ui(self):
         """Настраивает интерфейс"""
         self.setWindowTitle("File Converter Pro")
@@ -146,6 +222,17 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel("Готов к работе")
         self.statusBar().addWidget(self.status_label)
 
+        self.libreoffice_status_label = QLabel("LibreOffice: проверка...")
+        self.libreoffice_status_label.setMinimumWidth(180)
+        self.libreoffice_status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        self.statusBar().addPermanentWidget(self.libreoffice_status_label)
+
+        # Прогресс автоматической установки LibreOffice (скрыт до начала докачки)
+        self.status_progress_bar = QProgressBar()
+        self.status_progress_bar.setMaximumWidth(200)
+        self.status_progress_bar.hide()
+        self.statusBar().addPermanentWidget(self.status_progress_bar)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setMaximumWidth(200)
         self.statusBar().addPermanentWidget(self.progress_bar)
@@ -156,14 +243,18 @@ class MainWindow(QMainWindow):
     def setup_conversion_tab(self, parent: QWidget):
         """Настраивает вкладку конвертации"""
         layout = QVBoxLayout(parent)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(12)
 
-        # Верхняя панель
+        # ---- Верхняя панель: форматы + выбор файлов ----
         top_panel = QHBoxLayout()
+        top_panel.setSpacing(12)
 
         # Выбор форматов
         format_group = QGroupBox("Форматы")
         format_layout = QHBoxLayout(format_group)
+        format_layout.setContentsMargins(14, 18, 14, 14)
+        format_layout.setSpacing(8)
 
         self.input_format_combo = QComboBox()
         input_formats = ['Все'] + ConverterFactory.get_input_formats()
@@ -174,78 +265,91 @@ class MainWindow(QMainWindow):
         self.output_format_combo.setEnabled(False)
         self.output_format_combo.currentTextChanged.connect(self.update_convert_button)
 
-        format_layout.addWidget(QLabel("Из:"))
-        format_layout.addWidget(self.input_format_combo)
-        format_layout.addWidget(QLabel("В:"))
-        format_layout.addWidget(self.output_format_combo)
-        format_layout.addStretch()
+        # Комбобоксы не должны растягиваться по вертикали — фиксируем высоту
+        for combo in (self.input_format_combo, self.output_format_combo):
+            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            combo.setFixedHeight(48)
 
-        top_panel.addWidget(format_group)
+        lbl_from = QLabel("Из:")
+        lbl_from.setProperty("big", True)
+        format_layout.addWidget(lbl_from)
+        format_layout.addWidget(self.input_format_combo, 1)
+        lbl_to = QLabel("В:")
+        lbl_to.setProperty("big", True)
+        format_layout.addWidget(lbl_to)
+        format_layout.addWidget(self.output_format_combo, 1)
 
-        # Кнопки управления
-        buttons_group = QGroupBox("Управление")
-        buttons_layout = QHBoxLayout(buttons_group)
+        top_panel.addWidget(format_group, 3)
 
-        self.add_files_btn = QPushButton("➕ Добавить файлы")
+        # Кнопки управления файлами (крупные пилюли)
+        buttons_group = QGroupBox("Файлы")
+        buttons_layout = QVBoxLayout(buttons_group)
+        buttons_layout.setContentsMargins(14, 18, 14, 14)
+        buttons_layout.setSpacing(8)
+
+        # Две крупные кнопки в строку
+        row1 = QHBoxLayout()
+        row1.setSpacing(10)
+        self.add_files_btn = QPushButton("➕  Добавить файлы")
         self.add_files_btn.clicked.connect(self.add_files)
+        self.add_files_btn.setMinimumHeight(58)
+        row1.addWidget(self.add_files_btn, 1)
 
-        self.add_folder_btn = QPushButton("📁 Добавить папку")
+        self.add_folder_btn = QPushButton("📁  Добавить папку")
         self.add_folder_btn.clicked.connect(self.add_folder)
+        self.add_folder_btn.setMinimumHeight(58)
+        row1.addWidget(self.add_folder_btn, 1)
+        buttons_layout.addLayout(row1)
 
-        self.clear_btn = QPushButton("🗑️ Очистить")
+        self.clear_btn = QPushButton("🗑️  Очистить")
+        self.clear_btn.setProperty("slim", True)
         self.clear_btn.clicked.connect(self.clear_files)
-
-        self.convert_btn = QPushButton("🚀 Конвертировать")
-        self.convert_btn.clicked.connect(self.start_conversion)
-        self.convert_btn.setEnabled(False)
-        self.convert_btn.setMinimumHeight(40)
-        self.convert_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                font-size: 14px;
-                font-weight: bold;
-                padding: 10px 20px;
-                border-radius: 6px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
-                background-color: #666666;
-            }
-        """)
-
-        buttons_layout.addWidget(self.add_files_btn)
-        buttons_layout.addWidget(self.add_folder_btn)
+        self.clear_btn.setMinimumHeight(42)
         buttons_layout.addWidget(self.clear_btn)
-        buttons_layout.addStretch()
-        buttons_layout.addWidget(self.convert_btn)
 
-        top_panel.addWidget(buttons_group)
+        top_panel.addWidget(buttons_group, 2)
 
         layout.addLayout(top_panel)
 
-        # Список файлов
+        # ---- Список файлов ----
         file_group = QGroupBox("Файлы для конвертации")
         file_layout = QVBoxLayout(file_group)
+        file_layout.setContentsMargins(12, 16, 12, 12)
 
         self.file_list = QListWidget()
         self.file_list.setAcceptDrops(True)
         self.file_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.file_list.setMinimumHeight(300)
+        self.file_list.setMinimumHeight(220)
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self.show_file_context_menu)
         file_layout.addWidget(self.file_list)
 
-        layout.addWidget(file_group)
+        layout.addWidget(file_group, 1)
 
-        # Панель прогресса
-        progress_layout = QHBoxLayout()
-        progress_layout.addWidget(QLabel("Общий прогресс:"))
+        # ---- Нижняя панель: общий прогресс + большая кнопка конвертации ----
+        bottom_panel = QHBoxLayout()
+        bottom_panel.setSpacing(10)
+
+        progress_area = QVBoxLayout()
+        progress_area.setSpacing(6)
+        progress_label = QLabel("Общий прогресс")
+        progress_label.setProperty("secondary", True)
+        progress_area.addWidget(progress_label)
         self.total_progress = QProgressBar()
-        self.total_progress.setMinimumHeight(25)
-        progress_layout.addWidget(self.total_progress)
-        layout.addLayout(progress_layout)
+        self.total_progress.setMinimumHeight(30)
+        progress_area.addWidget(self.total_progress)
+        progress_area.addStretch()
+        bottom_panel.addLayout(progress_area, 2)
+
+        self.convert_btn = QPushButton("🚀 Конвертировать")
+        self.convert_btn.clicked.connect(self.start_conversion)
+        self.convert_btn.setEnabled(False)
+        self.convert_btn.setMinimumHeight(64)
+        self.convert_btn.setProperty("primary", True)
+        self._add_glow(self.convert_btn, QColor("#35B6F0"), blur=28)
+        bottom_panel.addWidget(self.convert_btn, 1)
+
+        layout.addLayout(bottom_panel)
 
         # Включаем Drag & Drop
         self.setAcceptDrops(True)
@@ -261,6 +365,36 @@ class MainWindow(QMainWindow):
         content_widget = QWidget()
         layout = QVBoxLayout(content_widget)
         layout.setContentsMargins(10, 10, 10, 10)
+
+        # Внешний вид (тема)
+        appear_group = QGroupBox("Внешний вид")
+        appear_layout = QVBoxLayout(appear_group)
+
+        theme_layout = QHBoxLayout()
+        theme_layout.addWidget(QLabel("Тема:", self))
+        self.theme_combo = QComboBox()
+        for label, val in [
+            ("Системная", "system"),
+            ("Светлая", "light"),
+            ("Тёмная", "dark"),
+        ]:
+            self.theme_combo.addItem(label, val)
+        current_theme = self.settings.get('theme', 'system')
+        self.theme_combo.setCurrentIndex(
+            {"system": 0, "light": 1, "dark": 2}.get(current_theme, 0)
+        )
+        self.theme_combo.currentIndexChanged.connect(
+            lambda idx: self.on_theme_changed(self.theme_combo.itemData(idx))
+        )
+        theme_layout.addWidget(self.theme_combo)
+        theme_layout.addStretch()
+        appear_layout.addLayout(theme_layout)
+
+        theme_hint = QLabel("Авто — подстраивается под тему вашей системы", self)
+        theme_hint.setProperty("secondary", True)
+        appear_layout.addWidget(theme_hint)
+
+        layout.addWidget(appear_group)
 
         # Настройки изображений
         image_group = QGroupBox("Настройки изображений")
@@ -431,7 +565,8 @@ class MainWindow(QMainWindow):
         # Кнопка сохранения
         save_btn = QPushButton("💾 Сохранить настройки")
         save_btn.clicked.connect(self.save_settings)
-        save_btn.setMinimumHeight(40)
+        save_btn.setMinimumHeight(56)
+        save_btn.setProperty("primary", True)
         layout.addWidget(save_btn)
 
         layout.addStretch()
@@ -457,7 +592,8 @@ class MainWindow(QMainWindow):
         # Кнопки управления логом
         log_buttons_layout = QHBoxLayout()
 
-        clear_log_btn = QPushButton("🗑️ Очистить лог")
+        clear_log_btn = QPushButton("🗑️  Очистить лог")
+        clear_log_btn.setProperty("slim", True)
         clear_log_btn.clicked.connect(lambda: self.log_text.clear())
         log_buttons_layout.addWidget(clear_log_btn)
 
@@ -945,8 +1081,22 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Обработчик закрытия окна"""
-        self.status_timer.stop()
+        try:
+            self.status_timer.stop()
+        except RuntimeError:
+            pass
         self.job_manager.stop()
+        # Останавливаем фоновую проверку LibreOffice
+        try:
+            self.libreoffice_manager.stop_periodic_check()
+        except RuntimeError:
+            pass
+        # Плавно останавливаем worker
         self.worker.quit()
-        self.worker.wait()
-        event.accept()
+        if self.worker.wait(3000):
+            event.accept()
+        else:
+            # Не блокируем закрытие, если worker завис
+            self.worker.terminate()
+            self.worker.wait(500)
+            event.accept()

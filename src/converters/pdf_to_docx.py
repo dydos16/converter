@@ -53,11 +53,10 @@ class PdfToDocxConverter(BaseConverter):
             self._update_status("Подготовка к конвертации PDF в DOCX...")
             self._update_progress(10)
 
-            # Проверяем наличие библиотеки
+            # Если pdf2docx недоступен — сразу извлекаем только текст (лёгкий режим)
             if not self.pdf2docx_available:
-                if not self._install_pdf2docx():
-                    self._handle_error("Не удалось установить pdf2docx")
-                    return False
+                self._update_status("pdf2docx недоступен, извлекаем только текст...")
+                return self._convert_text_only(input_path, output_path)
 
             self._update_progress(30)
 

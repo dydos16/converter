@@ -29,8 +29,9 @@ class LibreOfficeUtils:
                 self._soffice_path = Path(path)
                 return self._soffice_path
         
-        # 2. App Support
-        app_support = Path.home() / "Library" / "Application Support" / "FileConverterPro" / "libreoffice"
+        # 2. App Support (встроенный / самодостаточный LibreOffice)
+        from src.utils.helpers import get_libreoffice_dir
+        app_support = get_libreoffice_dir()
         if self.system == 'darwin':
             lo_app = app_support / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice"
         elif self.system == 'windows':

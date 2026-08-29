@@ -44,11 +44,16 @@ class ImageConverter(BaseConverter):
 
                 # Конвертируем RGBA в RGB для JPEG
                 output_format = output_path.suffix.lower().lstrip('.')
-                if output_format in ['jpg', 'jpeg'] and img.mode == 'RGBA':
-                    self._update_status("Конвертация цветового пространства...")
-                    background = Image.new('RGB', img.size, (255, 255, 255))
-                    background.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
-                    img = background
+                if output_format in ['jpg', 'jpeg']:
+                    if img.mode == 'RGBA':
+                        self._update_status("Конвертация цветового пространства...")
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        background.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
+                        img = background
+                    elif img.mode not in ('RGB', 'L'):
+                        # GIF/P и другие палитровые режимы -> RGB (иначе JPEG не может записать)
+                        self._update_status("Конвертация цветового пространства...")
+                        img = img.convert('RGB')
 
                 # Изменяем размер если нужно
                 if self.max_width or self.max_height:

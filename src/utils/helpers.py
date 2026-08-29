@@ -5,11 +5,73 @@ import os
 import sys
 import tempfile
 import shutil
+import platform
 from pathlib import Path
 from typing import Optional
 import subprocess
 from loguru import logger
 from src.config.formats import FILE_TYPE_INFO
+
+
+# --------------------------------------------------------------------------- #
+#  Кроссплатформенные пути
+# --------------------------------------------------------------------------- #
+def get_platform() -> str:
+    """Возвращает 'windows' | 'macos' | 'linux'."""
+    s = platform.system().lower()
+    if s == 'darwin':
+        return 'macos'
+    if s == 'windows':
+        return 'windows'
+    return 'linux'
+
+
+def get_app_data_dir() -> Path:
+    """
+    Возвращает каталог данных приложения (для LibreOffice и пр.).
+
+    macOS:   ~/Library/Application Support/FileConverterPro
+    Windows: %LOCALAPPDATA%/FileConverterPro
+    Linux:   ~/.local/share/FileConverterPro
+    """
+    system = get_platform()
+    if system == 'windows':
+        base = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA') or str(Path.home())
+        return Path(base) / "FileConverterPro"
+    if system == 'macos':
+        return Path.home() / "Library" / "Application Support" / "FileConverterPro"
+    # Linux
+    xdg_data = os.environ.get('XDG_DATA_HOME')
+    if xdg_data:
+        return Path(xdg_data) / "FileConverterPro"
+    return Path.home() / ".local" / "share" / "FileConverterPro"
+
+
+def get_config_dir() -> Path:
+    """
+    Возвращает каталог конфигурации (настройки, логи).
+
+    macOS:   ~/Library/Application Support/FileConverterPro
+    Windows: %APPDATA%/FileConverterPro
+    Linux:   ~/.config/file-converter
+    """
+    system = get_platform()
+    if system == 'windows':
+        base = os.environ.get('APPDATA') or str(Path.home())
+        return Path(base) / "FileConverterPro"
+    if system == 'macos':
+        return Path.home() / "Library" / "Application Support" / "FileConverterPro"
+    # Linux
+    xdg_conf = os.environ.get('XDG_CONFIG_HOME')
+    if xdg_conf:
+        return Path(xdg_conf) / "file-converter"
+    return Path.home() / ".config" / "file-converter"
+
+
+def get_libreoffice_dir() -> Path:
+    """Каталог для встроенного/самодостаточного LibreOffice."""
+    return get_app_data_dir() / "libreoffice"
+
 
 
 def get_file_icon(extension: str) -> str:

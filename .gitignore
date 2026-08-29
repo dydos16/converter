@@ -26,3 +26,9 @@ venv/
 .DS_Store
 temp_download/
 releases/
+
+# Артефакты сборки
+dist/
+build/
+*.spec
+.bincache*

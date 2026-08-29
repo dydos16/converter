@@ -1,5 +1,6 @@
 """
-PDF to Spreadsheet - извлечение таблиц из PDF
+PDF to Spreadsheet - извлечение таблиц из PDF.
+Без pandas/numpy — экономит ~65 МБ в собранном приложении.
 """
 from pathlib import Path
 from .base import BaseConverter
@@ -7,7 +8,7 @@ from loguru import logger
 
 
 class PdfToSpreadsheetConverter(BaseConverter):
-    """Конвертер PDF в таблицы через pdfplumber"""
+    """Конвертер PDF в таблицы через pdfplumber (без pandas)."""
 
     def get_input_formats(self):
         return ['pdf']
@@ -22,7 +23,6 @@ class PdfToSpreadsheetConverter(BaseConverter):
 
             try:
                 import pdfplumber
-                import pandas as pd
 
                 self._update_status("Анализ PDF...")
                 self._update_progress(30)
@@ -33,18 +33,15 @@ class PdfToSpreadsheetConverter(BaseConverter):
                     total_pages = len(pdf.pages)
 
                     for page_num, page in enumerate(pdf.pages):
-                        self._update_progress(30 + int((page_num / total_pages) * 50))
+                        self._update_progress(30 + int((page_num / max(total_pages, 1)) * 50))
 
-                        # Извлекаем таблицы со страницы
                         tables = page.extract_tables()
-
                         if tables:
                             for table in tables:
-                                if table and len(table) > 1:  # Игнорируем пустые таблицы
-                                    # Очищаем таблицу от пустых строк
-                                    cleaned_table = [row for row in table if any(cell and str(cell).strip() for cell in row)]
-                                    if cleaned_table:
-                                        all_tables.append(cleaned_table)
+                                if table and len(table) > 1:
+                                    cleaned = [row for row in table if any(cell and str(cell).strip() for cell in row)]
+                                    if cleaned:
+                                        all_tables.append(cleaned)
                                         self._update_status(f"Найдена таблица на странице {page_num + 1}")
 
                 if not all_tables:
@@ -52,35 +49,20 @@ class PdfToSpreadsheetConverter(BaseConverter):
                     return self._extract_text_fallback(input_path, output_path)
 
                 self._update_progress(80)
-
                 output_ext = output_path.suffix.lower().lstrip('.')
 
-                # Объединяем все таблицы
-                if len(all_tables) == 1:
-                    # Одна таблица
-                    df = pd.DataFrame(all_tables[0])
-                else:
-                    # Несколько таблиц - объединяем с разделителями
-                    dfs = []
-                    for i, table in enumerate(all_tables):
-                        # Добавляем заголовок
-                        header_df = pd.DataFrame([[f"=== Table {i+1} ==="]], columns=[''])
-                        dfs.append(header_df)
+                # Объединяем таблицы в список строк (с разделителями)
+                rows = []
+                for i, table in enumerate(all_tables):
+                    if len(all_tables) > 1:
+                        rows.append([f"=== Table {i + 1} ==="])
+                    for row in table:
+                        rows.append([str(c) if c is not None else "" for c in row])
+                    if len(all_tables) > 1:
+                        rows.append([""])
 
-                        # Добавляем саму таблицу
-                        df_table = pd.DataFrame(table)
-                        dfs.append(df_table)
-
-                        # Добавляем пустую строку
-                        dfs.append(pd.DataFrame([['']]))
-
-                    df = pd.concat(dfs, ignore_index=True)
-
-                # Сохраняем
-                if output_ext in ['xlsx', 'xls']:
-                    df.to_excel(str(output_path), index=False, header=False)
-                elif output_ext == 'csv':
-                    df.to_csv(str(output_path), index=False, header=False, encoding='utf-8')
+                if not self._save_rows(rows, output_path, output_ext):
+                    return False
 
                 self._update_progress(100)
                 self._update_status(f"Извлечено {len(all_tables)} таблиц")
@@ -89,11 +71,11 @@ class PdfToSpreadsheetConverter(BaseConverter):
             except ImportError:
                 self._handle_error(
                     "Установите необходимые библиотеки:\n\n"
-                    "pip install --break-system-packages pdfplumber pandas openpyxl\n\n"
+                    "pip install pdfplumber openpyxl\n\n"
                     "Или используйте виртуальное окружение:\n"
                     "python3 -m venv venv\n"
                     "source venv/bin/activate\n"
-                    "pip install pdfplumber pandas openpyxl"
+                    "pip install pdfplumber openpyxl"
                 )
                 return False
 
@@ -103,15 +85,13 @@ class PdfToSpreadsheetConverter(BaseConverter):
             return False
 
     def _extract_text_fallback(self, input_path: Path, output_path: Path) -> bool:
-        """Запасной вариант - извлечение текста"""
+        """Запасной вариант — извлечение текста."""
         try:
             import pdfplumber
-            import pandas as pd
 
             self._update_status("Извлечение текста...")
 
             all_text = []
-
             with pdfplumber.open(str(input_path)) as pdf:
                 for page_num, page in enumerate(pdf.pages):
                     text = page.extract_text()
@@ -123,16 +103,12 @@ class PdfToSpreadsheetConverter(BaseConverter):
             lines = []
             for line in '\n'.join(all_text).split('\n'):
                 if line.strip():
-                    lines.append(line.strip())
-
-            df = pd.DataFrame(lines, columns=['Content'])
+                    lines.append([line.strip()])
 
             output_ext = output_path.suffix.lower().lstrip('.')
 
-            if output_ext in ['xlsx', 'xls']:
-                df.to_excel(str(output_path), index=False)
-            elif output_ext == 'csv':
-                df.to_csv(str(output_path), index=False, encoding='utf-8')
+            if not self._save_rows(lines, output_path, output_ext):
+                return False
 
             self._update_progress(100)
             self._update_status("Текст успешно извлечен")
@@ -140,4 +116,78 @@ class PdfToSpreadsheetConverter(BaseConverter):
 
         except Exception as e:
             logger.error(f"Ошибка извлечения текста: {e}")
+            return False
+
+    def _save_rows(self, rows: list, output_path: Path, output_ext: str) -> bool:
+        """Сохраняет список строк (lists of str) в xlsx/xls/csv."""
+        try:
+            if output_ext == 'csv':
+                import csv
+                with open(output_path, 'w', encoding='utf-8', newline='') as f:
+                    writer = csv.writer(f)
+                    for row in rows:
+                        writer.writerow(row)
+                return True
+
+            if output_ext in ('xlsx', 'xls'):
+                import openpyxl
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                for row in rows:
+                    ws.append(row)
+
+                # openpyxl не умеет .xls — сначала пишем xlsx, затем конвертируем через LibreOffice
+                if output_ext == 'xls':
+                    tmp_xlsx = output_path.with_suffix('.xlsx')
+                    wb.save(str(tmp_xlsx))
+                    return self._convert_xlsx_to_xls(tmp_xlsx, output_path)
+
+                wb.save(str(output_path))
+                return True
+
+            # Неизвестный формат — xlsx по умолчанию
+            import openpyxl
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            for row in rows:
+                ws.append(row)
+            wb.save(str(output_path))
+            return True
+
+        except Exception as e:
+            logger.error(f"Ошибка сохранения таблицы: {e}")
+            return False
+
+    def _convert_xlsx_to_xls(self, xlsx_path: Path, xls_path: Path) -> bool:
+        """Конвертирует xlsx в xls через LibreOffice."""
+        try:
+            import subprocess
+            from src.core.libreoffice_manager import LibreOfficeManager
+            lo_manager = LibreOfficeManager()
+            soffice = lo_manager.get_soffice_path() or lo_manager._find_soffice()
+            if not soffice:
+                logger.error("LibreOffice не найден для конвертации xlsx->xls")
+                return False
+
+            user_inst = lo_manager._get_user_profile_path().replace('file://', '-env:UserInstallation=file://')
+
+            cmd = [
+                str(soffice),
+                user_inst,
+                '--headless', '--invisible', '--nocrashreport',
+                '--nofirststartwizard', '--nologo', '--norestore',
+                '--convert-to', 'xls',
+                '--outdir', str(xls_path.parent),
+                str(xlsx_path)
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            expected = xls_path.parent / f"{xlsx_path.stem}.xls"
+            if expected.exists():
+                if expected != xls_path:
+                    expected.rename(xls_path)
+                return True
+            logger.error(f"xls не создан: {result.stderr[:200]}")
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка конвертации xlsx->xls: {e}")
             return False

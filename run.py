@@ -21,9 +21,10 @@ sys.path.insert(0, str(BASE))
 
 
 def get_libreoffice_path():
-    """Ищет LibreOffice в системе или в App Support"""
+    """Ищет LibreOffice в системе или во встроенном каталоге"""
     system = platform.system().lower()
-    app_support = Path.home() / "Library" / "Application Support" / "FileConverterPro" / "libreoffice"
+    from src.utils.helpers import get_libreoffice_dir
+    app_support = get_libreoffice_dir()
     
     if system == 'darwin':
         candidates = [
@@ -83,7 +84,8 @@ def download_libreoffice():
     else:
         url = "https://github.com/MiHoN135/Convertator-Releases/releases/download/v1.0.0/libreoffice_linux.tar.gz"
     
-    app_support = Path.home() / "Library" / "Application Support" / "FileConverterPro" / "libreoffice"
+    from src.utils.helpers import get_libreoffice_dir
+    app_support = get_libreoffice_dir()
     app_support.mkdir(parents=True, exist_ok=True)
     
     # Скачиваем
@@ -116,25 +118,6 @@ def main():
     print("  File Converter Pro")
     print("=" * 60)
     
-    # Проверяем/устанавливаем LibreOffice
-    lo_path = get_libreoffice_path()
-    if not lo_path:
-        print("\n❌ LibreOffice не найден")
-        print("📥 Скачиваю автоматически (~500 MB)...\n")
-        
-        try:
-            if download_libreoffice():
-                lo_path = get_libreoffice_path()
-                print(f"✅ LibreOffice установлен: {lo_path}")
-            else:
-                print("⚠️ Не удалось установить LibreOffice")
-                print("   Установите вручную: brew install --cask libreoffice")
-        except Exception as e:
-            print(f"⚠️ Ошибка: {e}")
-            print("   Конвертация DOCX/PPTX будет недоступна")
-    else:
-        print(f"✅ LibreOffice найден: {lo_path}")
-    
     print("\nЗапуск интерфейса...\n")
     
     # Запускаем GUI
@@ -143,45 +126,36 @@ def main():
     from PySide6.QtGui import QFont
     from loguru import logger
     
-    logger.add(Path.home() / '.config' / 'file-converter' / 'logs' / 'app.log', 
+    # Убираем стандартный stderr-хендлер loguru, чтобы сообщения не дублировались
+    logger.remove()
+    from src.utils.helpers import get_config_dir
+    logger.add(get_config_dir() / 'logs' / 'app.log', 
                rotation='10 MB', retention='30 days', level='DEBUG')
     logger.add(sys.stderr, level='INFO')
     
     logger.info("Запуск File Converter Pro")
     
+    # HighDPI в PySide6 >=6.4 включён по умолчанию — устаревшие атрибуты не нужны.
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
-    if hasattr(Qt, 'AA_EnableHighDpiScaling'):
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    if hasattr(Qt, 'AA_UseHighDpiPixmaps'):
-        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-    
+
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
     app.setFont(QFont())
-    
-    app.setStyleSheet("""
-        QMainWindow { background-color: #2b2b2b; }
-        QLabel { color: #ffffff; }
-        QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 8px; border: none; border-radius: 4px; }
-        QPushButton:hover { background-color: #45a049; }
-        QPushButton:disabled { background-color: #666666; }
-        QListWidget { background-color: #3c3c3c; color: #ffffff; border: 1px solid #555; }
-        QComboBox { background-color: #3c3c3c; color: #ffffff; border: 1px solid #555; padding: 4px; }
-        QProgressBar { border: 1px solid #555; border-radius: 3px; text-align: center; }
-        QProgressBar::chunk { background-color: #4CAF50; }
-        QTabWidget::pane { border: 1px solid #555; background-color: #2b2b2b; }
-        QTabBar::tab { background-color: #3c3c3c; color: #ffffff; padding: 5px 10px; }
-        QTabBar::tab:selected { background-color: #4a4a4a; }
-        QGroupBox { color: #ffffff; border: 1px solid #555; margin-top: 10px; }
-        QCheckBox { color: #ffffff; }
-        QSpinBox { background-color: #3c3c3c; color: #ffffff; border: 1px solid #555; padding: 3px; }
-        QTextEdit { background-color: #1e1e1e; color: #00ff00; border: 1px solid #555; }
-        QScrollArea { background-color: #2b2b2b; border: none; }
-    """)
-    
+
+    # Тема из настроек: 'system' (по умолчанию) | 'light' | 'dark'
+    from src.core.settings import Settings
+    from src.gui.styles import get_stylesheet_for, get_palette_for
+    theme_mode = Settings().get('theme', 'system')
+    app.setPalette(get_palette_for(theme_mode))
+    app.setStyleSheet(get_stylesheet_for(theme_mode))
+
     from src.gui.main_window import MainWindow
     window = MainWindow()
     window.show()
+    
+    # Фоновая проверка LibreOffice и авто-докачка при его отсутствии (не блокируют GUI)
+    window.maybe_start_libreoffice_install()
+    window.libreoffice_manager.start_periodic_check()
     
     sys.exit(app.exec())
 

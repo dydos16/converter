@@ -99,8 +99,18 @@ class PdfCompressor(BaseConverter):
     def _compress_with_ghostscript(self, input_path: Path, output_path: Path) -> bool:
         """Сжимает PDF через Ghostscript"""
         import shutil
+        import platform
 
-        gs_path = shutil.which('gs')
+        # Ghostscript имеет разные имена бинарника на разных ОС
+        gs_path = None
+        if platform.system().lower() == 'windows':
+            for name in ['gswin64c', 'gswin32c', 'gs']:
+                gs_path = shutil.which(name)
+                if gs_path:
+                    break
+        else:
+            gs_path = shutil.which('gs')
+
         if not gs_path:
             self._handle_error(
                 "Ghostscript не найден!\n\n"

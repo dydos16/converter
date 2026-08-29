@@ -18,7 +18,8 @@ from gui.main_window import MainWindow
 
 def setup_logging():
     """Настраивает логирование"""
-    log_dir = Path.home() / '.config' / 'file-converter' / 'logs'
+    from src.utils.helpers import get_config_dir
+    log_dir = get_config_dir() / 'logs'
     log_dir.mkdir(parents=True, exist_ok=True)
 
     logger.add(

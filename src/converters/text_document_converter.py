@@ -30,9 +30,12 @@ class TextDocumentConverter(BaseConverter):
 
         system = platform.system().lower()
         project_root = Path(__file__).parent.parent.parent
+        from src.utils.helpers import get_libreoffice_dir
+        app_support = get_libreoffice_dir()
 
         if system == 'darwin':
             paths = [
+                app_support / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
                 project_root / "resources" / "libreoffice" / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
                 '/Applications/LibreOffice.app/Contents/MacOS/soffice',
             ]
@@ -42,6 +45,7 @@ class TextDocumentConverter(BaseConverter):
                     return True
         elif system == 'windows':
             paths = [
+                app_support / "windows" / "LibreOffice" / "program" / "soffice.exe",
                 project_root / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe",
                 'C:/Program Files/LibreOffice/program/soffice.exe',
             ]
@@ -112,6 +116,14 @@ class TextDocumentConverter(BaseConverter):
             logger.exception("Ошибка конвертации документа")
             return False
 
+    def _user_installation_arg(self) -> str:
+        """Возвращает аргумент -env:UserInstallation для изолированного профиля LibreOffice."""
+        try:
+            from src.core.libreoffice_manager import LibreOfficeManager
+            return LibreOfficeManager()._get_user_profile_path().replace('file://', '-env:UserInstallation=file://')
+        except Exception:
+            return '--norestore'
+
     def _convert_with_libreoffice(self, input_path: Path, output_path: Path, output_ext: str) -> bool:
         """Конвертирует через LibreOffice"""
         self._update_status(f"Конвертация через LibreOffice...")
@@ -129,6 +141,7 @@ class TextDocumentConverter(BaseConverter):
 
         cmd = [
             str(self._soffice_path),
+            self._user_installation_arg(),
             '--headless',
             '--invisible',
             '--nocrashreport',

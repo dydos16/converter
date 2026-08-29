@@ -27,6 +27,19 @@ def check_libreoffice():
             '/usr/bin/soffice',
         ]
 
+    # Встроенный (самодостаточный) LibreOffice
+    try:
+        from src.utils.helpers import get_libreoffice_dir
+        base = get_libreoffice_dir()
+        if sys.platform == 'darwin':
+            paths.append(str(base / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice"))
+        elif sys.platform == 'win32':
+            paths.append(str(base / "windows" / "LibreOffice" / "program" / "soffice.exe"))
+        else:
+            paths.append(str(base / "linux" / "usr" / "bin" / "soffice"))
+    except Exception:
+        pass
+
     # Проверяем пути
     for path in paths:
         if Path(path).exists():

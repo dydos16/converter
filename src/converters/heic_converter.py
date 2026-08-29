@@ -19,7 +19,14 @@ class HeicConverter(BaseConverter):
         self.heic_available = self._check_heic()
 
     def _check_heic(self):
-        """Проверяет доступность pyheif"""
+        """Проверяет доступность поддержки HEIC (pillow-heif или pyheif)."""
+        # Приоритет — pillow-heif (легче, ставится без libheif через wheel)
+        try:
+            import pillow_heif
+            pillow_heif.register_heif_opener()
+            return True
+        except ImportError:
+            pass
         try:
             import pyheif
             return True
@@ -27,20 +34,24 @@ class HeicConverter(BaseConverter):
             return False
 
     def _install_heic(self):
-        """Пытается установить pyheif без brew (через wheel)"""
+        """Пытается установить поддержку HEIC (pillow-heif приоритетно)."""
         try:
-            self._update_status("Установка pyheif...")
-
-            system = platform.system().lower()
-            python_version = f"{sys.version_info.major}{sys.version_info.minor}"
-
-            # Пробуем три стратегии:
-            # 1. Обычный pip (вдруг уже есть libheif в системе)
-            # 2. Предкомпилированный wheel для Windows/macOS (содержит libheif внутри)
-            # 3. Сообщение о необходимости libheif
-
-            # Стратегия 1: обычный pip install
+            # Стратегия 1: pillow-heif — лёгкая, ставится без libheif/компиляции
             try:
+                self._update_status("Установка pillow-heif...")
+                subprocess.check_call([
+                    sys.executable, '-m', 'pip', 'install', 'pillow-heif', '--quiet'
+                ])
+                import pillow_heif
+                pillow_heif.register_heif_opener()
+                self.heic_available = True
+                return True
+            except Exception:
+                pass
+
+            # Стратегия 2: обычный pip install pyheif
+            try:
+                self._update_status("Установка pyheif...")
                 subprocess.check_call([
                     sys.executable, '-m', 'pip', 'install', 'pyheif', '--quiet'
                 ])
@@ -50,43 +61,8 @@ class HeicConverter(BaseConverter):
             except Exception:
                 pass
 
-            # Стратегия 2: wheel для Windows (там libheif внутри)
-            if system == 'windows':
-                wheel_map = {
-                    '311': 'pyheif-0.8.0-cp311-cp311-win_amd64.whl',
-                    '310': 'pyheif-0.8.0-cp310-cp310-win_amd64.whl',
-                    '39': 'pyheif-0.8.0-cp39-cp39-win_amd64.whl',
-                }
-                wheel_name = wheel_map.get(python_version)
-                if wheel_name:
-                    wheel_url = f"https://github.com/FIRC/pythonlibs_whl_mirror/raw/master/pyheif/{wheel_name}"
-                    try:
-                        subprocess.check_call([
-                            sys.executable, '-m', 'pip', 'install', wheel_url, '--quiet'
-                        ])
-                        self.heic_available = self._check_heic()
-                        if self.heic_available:
-                            return True
-                    except Exception:
-                        pass
-
-            # Стратегия 2б: wheel для macOS arm64 (M1/M2) - экспериментально
-            if system == 'darwin':
-                # Для macOS готовых wheel с libheif внутри практически нет
-                # Пробуем альтернативу pillow_heif (более лёгкая)
-                try:
-                    subprocess.check_call([
-                        sys.executable, '-m', 'pip', 'install', 'pillow-heif', '--quiet'
-                    ])
-                    import pillow_heif
-                    pillow_heif.register_heif_opener()
-                    self.heic_available = self._check_heic()
-                    if self.heic_available:
-                        return True
-                except Exception:
-                    pass
-
             # Если ничего не помогло — даём инструкцию
+            system = platform.system().lower()
             if system == 'darwin':
                 self._handle_error(
                     "❌ Не удалось установить поддержку HEIC\n\n"
@@ -135,49 +111,49 @@ class HeicConverter(BaseConverter):
                 if not self._install_heic():
                     return False
 
-            import pyheif
+            # Приоритетный путь — pillow-heif регистрирует opener в PIL,
+            # поэтому Image.open() читает HEIC/HEIF напрямую.
+            try:
+                import pillow_heif
+                pillow_heif.register_heif_opener()
+            except ImportError:
+                pass
 
             self._update_status("Чтение HEIC файла...")
             self._update_progress(30)
 
-            # Читаем HEIC
-            with open(input_path, 'rb') as f:
-                heif_file = pyheif.read(f.read())
+            with Image.open(input_path) as img:
+                # Приводим к RGB если нужно
+                img.load()
 
-            # Конвертируем в PIL Image
-            img = Image.frombytes(
-                heif_file.mode,
-                heif_file.size,
-                heif_file.data,
-                "raw",
-                heif_file.mode,
-                heif_file.stride,
-            )
+                self._update_progress(60)
 
-            self._update_progress(60)
+                output_format = output_path.suffix.lower().lstrip('.')
 
-            output_format = output_path.suffix.lower().lstrip('.')
+                # Конвертируем в RGB для JPEG
+                if output_format in ['jpg', 'jpeg']:
+                    if img.mode == 'RGBA':
+                        self._update_status("Конвертация цветового пространства...")
+                        background = Image.new('RGB', img.size, (255, 255, 255))
+                        background.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
+                        img = background
+                    elif img.mode not in ('RGB', 'L', 'I;16'):
+                        self._update_status("Конвертация цветового пространства...")
+                        img = img.convert('RGB')
 
-            # Конвертируем в RGB для JPEG
-            if output_format in ['jpg', 'jpeg'] and img.mode == 'RGBA':
-                self._update_status("Конвертация цветового пространства...")
-                background = Image.new('RGB', img.size, (255, 255, 255))
-                background.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
-                img = background
+                self._update_status(f"Сохранение в {output_format.upper()}...")
+                self._update_progress(80)
 
-            self._update_status(f"Сохранение в {output_format.upper()}...")
-            self._update_progress(80)
+                save_kwargs = {}
+                if output_format in ['jpg', 'jpeg']:
+                    save_kwargs['quality'] = self.quality
+                    save_kwargs['optimize'] = True
+                elif output_format == 'webp':
+                    save_kwargs['quality'] = self.quality
+                elif output_format == 'png':
+                    save_kwargs['compress_level'] = 6
 
-            save_kwargs = {}
-            if output_format in ['jpg', 'jpeg']:
-                save_kwargs['quality'] = self.quality
-                save_kwargs['optimize'] = True
-            elif output_format == 'webp':
-                save_kwargs['quality'] = self.quality
-            elif output_format == 'png':
-                save_kwargs['compress_level'] = 6
-
-            img.save(output_path, **save_kwargs)
+                img.save(output_path, **save_kwargs)
 
             self._update_progress(100)
             self._update_status("Конвертация завершена!")

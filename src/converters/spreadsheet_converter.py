@@ -30,9 +30,12 @@ class SpreadsheetConverter(BaseConverter):
 
         system = platform.system().lower()
         project_root = Path(__file__).parent.parent.parent
+        from src.utils.helpers import get_libreoffice_dir
+        app_support = get_libreoffice_dir()
 
         if system == 'darwin':
             paths = [
+                app_support / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
                 project_root / "resources" / "libreoffice" / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
                 '/Applications/LibreOffice.app/Contents/MacOS/soffice',
             ]
@@ -42,6 +45,7 @@ class SpreadsheetConverter(BaseConverter):
                     return True
         elif system == 'windows':
             paths = [
+                app_support / "windows" / "LibreOffice" / "program" / "soffice.exe",
                 project_root / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe",
                 'C:/Program Files/LibreOffice/program/soffice.exe',
             ]
@@ -121,6 +125,7 @@ class SpreadsheetConverter(BaseConverter):
 
         cmd = [
             str(self._soffice_path),
+            self._user_installation_arg(),
             '--headless',
             '--invisible',
             '--nocrashreport',
@@ -148,6 +153,17 @@ class SpreadsheetConverter(BaseConverter):
 
     def _convert_spreadsheet(self, input_path: Path, output_path: Path, output_ext: str) -> bool:
         """Конвертирует между табличными форматами"""
+        input_ext = input_path.suffix.lower().lstrip('.')
+        self._update_status(f"Чтение файла {input_path.name}...")
+
+        # Старые .xls / бинарные форматы openpyxl не читает и не пишет —
+        # используем LibreOffice как универсальный конвертер таблиц.
+        if input_ext == 'xls' or output_ext == 'xls':
+            if not self.libreoffice_available:
+                self._handle_error("Для работы с .xls требуется LibreOffice.")
+                return False
+            return self._convert_via_soffice(input_path, output_path, output_ext)
+
         if not self.openpyxl_available:
             if not self._install_openpyxl():
                 self._handle_error("Не удалось установить openpyxl")
@@ -157,11 +173,7 @@ class SpreadsheetConverter(BaseConverter):
             import openpyxl
             import csv
 
-            self._update_status(f"Чтение файла {input_path.name}...")
-
             # Читаем входной файл
-            input_ext = input_path.suffix.lower().lstrip('.')
-
             if input_ext == 'csv':
                 # Читаем CSV
                 wb = openpyxl.Workbook()
@@ -173,7 +185,7 @@ class SpreadsheetConverter(BaseConverter):
                         for col_idx, value in enumerate(row, 1):
                             ws.cell(row=row_idx, column=col_idx, value=value)
             else:
-                # Читаем Excel
+                # Читаем Excel (xlsx)
                 wb = openpyxl.load_workbook(input_path)
                 ws = wb.active
 
@@ -196,4 +208,47 @@ class SpreadsheetConverter(BaseConverter):
 
         except Exception as e:
             logger.error(f"Ошибка конвертации таблицы: {e}")
+            return False
+
+    def _user_installation_arg(self) -> str:
+        """Возвращает аргумент -env:UserInstallation для изолированного профиля LibreOffice."""
+        try:
+            from src.core.libreoffice_manager import LibreOfficeManager
+            return LibreOfficeManager()._get_user_profile_path().replace('file://', '-env:UserInstallation=file://')
+        except Exception:
+            return '--norestore'
+
+    def _convert_via_soffice(self, input_path: Path, output_path: Path, output_ext: str) -> bool:
+        """Конвертирует таблицы через LibreOffice (для .xls и др.)."""
+        if not self.libreoffice_available:
+            self._handle_error("LibreOffice не найден!")
+            return False
+
+        self._update_status(f"Конвертация через LibreOffice в {output_ext.upper()}...")
+
+        # LibreOffice поддерживает запись xls/xlsx/csv через фильтры
+        cmd = [
+            str(self._soffice_path),
+            self._user_installation_arg(),
+            '--headless', '--invisible', '--nocrashreport',
+            '--nofirststartwizard', '--nologo', '--norestore',
+            '--convert-to', output_ext,
+            '--outdir', str(output_path.parent),
+            str(input_path)
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+            expected_file = output_path.parent / f"{input_path.stem}.{output_ext}"
+            if expected_file.exists():
+                if expected_file != output_path:
+                    expected_file.rename(output_path)
+                self._update_status("Конвертация завершена!")
+                return True
+
+            logger.error(f"Файл не создан после LibreOffice: {result.stderr[:200]}")
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка конвертации через LibreOffice: {e}")
             return False

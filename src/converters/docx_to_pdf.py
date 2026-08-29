@@ -1,9 +1,9 @@
 """
-DOCX to PDF - через LibreOffice
+DOCX to PDF - через LibreOffice с ленивой загрузкой
 """
 from pathlib import Path
 from .base import BaseConverter
-from src.utils.libreoffice_utils import LibreOfficeUtils
+from src.core.libreoffice_manager import LibreOfficeManager
 from loguru import logger
 
 
@@ -12,7 +12,7 @@ class DocxToPdfConverter(BaseConverter):
 
     def __init__(self):
         super().__init__()
-        self.lo_utils = LibreOfficeUtils()
+        self.lo_manager = LibreOfficeManager()
 
     def get_input_formats(self):
         return ['docx', 'doc']
@@ -26,16 +26,16 @@ class DocxToPdfConverter(BaseConverter):
             self._update_progress(10)
 
             # Проверяем наличие LibreOffice
-            if not self.lo_utils.is_installed():
+            if not self.lo_manager.is_available():
                 self._update_status("LibreOffice не найден")
-                self._handle_error(self.lo_utils.get_install_instructions())
+                self._handle_error("LibreOffice не установлен. Конвертация будет доступна после установки.")
                 return False
 
             self._update_status(f"Конвертация {input_path.name} в PDF...")
             self._update_progress(30)
 
             # Используем единый метод конвертации
-            success = self.lo_utils.convert_to_pdf(
+            success = self.lo_manager.convert_to_pdf(
                 input_path,
                 output_path,
                 progress_callback=self._update_progress
