@@ -12,14 +12,23 @@ MacOS Xcode license для `lipo` — universal-бинарники работа�
 import sys, shutil, subprocess, platform, os, tempfile
 from pathlib import Path
 
+# Windows-консоль не всегда поддерживает Unicode emoji — включим UTF-8 вывод
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 SYSTEM = platform.system().lower()
 PROJECT = Path(__file__).parent
 DIST = PROJECT / "dist"
 BUILD = PROJECT / "build"
 NAME = "FileConverterPro"
 
-def ok(msg): print(f"\033[92m✅ {msg}\033[0m")
-def info(msg): print(f"\033[96m📦 {msg}\033[0m")
+def ok(msg): print(f"[OK] {msg}")
+def info(msg): print(f"[..] {msg}")
+def err(msg): print(f"[!!] {msg}")
 
 # Очистка старых артефактов
 for d in [DIST, BUILD]:
