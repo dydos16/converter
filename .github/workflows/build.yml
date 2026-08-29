@@ -60,15 +60,25 @@ jobs:
       - name: Package into zip
         shell: bash
         run: |
-          set -e
-          cd dist
-          if [ -d "$(basename $asset)" ]; then
-            cd "$(basename $asset)"
-            zip -r "../${artifact}.zip" .
-          else
-            zip "${artifact}.zip" "$(basename $asset)"
-          fi
-          ls -la ../*.zip
+          python << 'PYEOF'
+          import zipfile, os, sys
+          from pathlib import Path
+          asset = os.environ["asset"]          # e.g. dist/FileConverterPro.app
+          art   = os.environ["artifact"]       # e.g. FileConverterPro_macOS
+          src = Path(asset)
+          out_dir = Path("dist")
+          out_zip = out_dir / f"{art}.zip"
+          out_zip.parent.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
+              if src.is_dir():
+                  # Упаковываем содержимое папки (корень записи = содержимое)
+                  for p in src.rglob("*"):
+                      if p.is_file():
+                          z.write(p, p.relative_to(src))
+              else:
+                  z.write(src, src.name)
+          print(f"Created {out_zip} ({out_zip.stat().st_size/1024/1024:.0f} MB)")
+          PYEOF
         env:
           artifact: ${{ matrix.artifact }}
           asset: ${{ matrix.asset }}
