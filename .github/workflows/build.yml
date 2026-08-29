@@ -9,6 +9,8 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -96,6 +98,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/${{ matrix.artifact }}.zip
-          generate_release_notes: true
+          # generate_release_notes требует доп. endpoint и может дать 403 от GITHUB_TOKEN
+          # из-за политик репозитория. Отключаем — Release всё равно создастся.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
