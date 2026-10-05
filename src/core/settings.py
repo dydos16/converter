@@ -80,19 +80,9 @@ class Settings:
         self.settings[key] = value
         self.save()
 
-    def add_recent_file(self, file_path: str):
-        """Добавляет файл в список недавних"""
-        recent = self.settings.get('recent_files', [])
-
-        # Удаляем если уже есть
-        if file_path in recent:
-            recent.remove(file_path)
-
-        # Добавляем в начало
-        recent.insert(0, file_path)
-
-        # Оставляем только последние 10
-        self.settings['recent_files'] = recent[:10]
+    def update(self, values: Dict[str, Any]):
+        """Устанавливает несколько значений и пишет файл один раз"""
+        self.settings.update(values)
         self.save()
 
     def add_recent_format(self, input_ext: str, output_ext: str):

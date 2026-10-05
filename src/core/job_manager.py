@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, List, Dict, Any
 from threading import Thread, Lock, Event
-from queue import Queue
+from queue import Queue, Empty
 import uuid
 from loguru import logger
 
@@ -243,7 +243,7 @@ class JobManager:
                 # Получаем следующую задачу с таймаутом
                 try:
                     job = self.queue.get(timeout=1)
-                except:
+                except Empty:
                     continue
 
                 # Проверяем статус задачи перед запуском

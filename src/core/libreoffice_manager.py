@@ -9,6 +9,7 @@ import platform
 import os
 import sys
 import tarfile
+import threading
 import zipfile
 import shutil
 import urllib.request
@@ -48,6 +49,10 @@ class LibreOfficeManager(QObject):
         self._check_timer: Optional[QTimer] = None
         self._install_thread: Optional[QThread] = None
         self._check_attempted: bool = False
+        self._profile_lock = threading.Lock()
+        self._profile_slots: dict[int, threading.Thread] = {}
+        # Проверка идёт в фоновом потоке; таймер останавливаем уже в GUI-потоке
+        self.check_finished.connect(self._on_check_finished)
 
         # Настройки таймера для фоновой проверки
         self._check_interval = 5000  # 5 секунд
@@ -137,8 +142,17 @@ class LibreOfficeManager(QObject):
         Используем собственный каталог в App Support, чтобы избежать повреждённого
         системного профиля (~/Library/Application Support/LibreOffice), вызывающего
         DeploymentException при конвертации.
+        Каждый поток получает свой слот профиля: два soffice на одном профиле
+        мешают друг другу, и параллельные конвертации падают или зависают.
         """
-        profile = self.get_app_support_dir() / "profile"
+        me = threading.current_thread()
+        with self._profile_lock:
+            slot = next((i for i, t in self._profile_slots.items() if t is me), None)
+            if slot is None:
+                slot = next((i for i, t in self._profile_slots.items() if not t.is_alive()),
+                            len(self._profile_slots))
+                self._profile_slots[slot] = me
+        profile = self.get_app_support_dir() / "profile" / str(slot)
         profile.mkdir(parents=True, exist_ok=True)
         # as_uri() корректно кодирует пробелы (например в "Application Support") -> %20
         return profile.as_uri()
@@ -221,19 +235,14 @@ class LibreOfficeManager(QObject):
                 self._is_checking = False
                 self.check_finished.emit(self._is_available)
 
-                # Если проверка прошла успешно или исчерпаны попытки — останавливаем таймер
-                if self._is_available or self._check_attempts >= self._max_check_attempts:
-                    self.stop_periodic_check()
-                    if self._is_available:
-                        logger.info("Проверка LibreOffice завершена успешно")
-                    else:
-                        logger.info("Проверка LibreOffice завершена: недоступен")
-                elif not self._is_available:
-                    logger.debug(f"Повторная проверка LibreOffice через {self._check_interval}ms")
+        # soffice --version может идти секунды — не блокируем GUI
+        threading.Thread(target=_run_check, daemon=True, name="LibreOfficeCheck").start()
 
-        # Запускаем проверку в отдельном потоке, чтобы не блокировать GUI
-        # Используем QTimer.singleShot для выполнения в event loop (не блокирует GUI)
-        QTimer.singleShot(0, _run_check)
+    def _on_check_finished(self, available: bool):
+        """Вызывается в GUI-потоке: останавливает таймер при успехе или исчерпании попыток."""
+        if available or self._check_attempts >= self._max_check_attempts:
+            self.stop_periodic_check()
+            logger.info(f"Проверка LibreOffice завершена: {'доступен' if available else 'недоступен'}")
 
     def start_periodic_check(self):
         """Запускает периодическую проверку доступности LibreOffice."""
@@ -280,11 +289,16 @@ class LibreOfficeManager(QObject):
         app_support = self.get_app_support_dir()
         app_support.mkdir(parents=True, exist_ok=True)
 
+        last = [-1]
+
         def _report(block_num, block_size, total_size):
             if total_size <= 0:
                 return
-            percent = int(block_num * block_size / total_size * 100)
-            self.install_progress.emit(min(percent, 99), f"Скачивание LibreOffice... {percent}%")
+            percent = min(int(block_num * block_size / total_size * 100), 99)
+            # urlretrieve зовёт это каждые 8 КБ — шлём в GUI только смену процента
+            if percent != last[0]:
+                last[0] = percent
+                self.install_progress.emit(percent, f"Скачивание LibreOffice... {percent}%")
 
         try:
             logger.info(f"Скачивание LibreOffice: {url}")
@@ -305,7 +319,8 @@ class LibreOfficeManager(QObject):
                 z.extractall(app_support)
         else:
             with tarfile.open(archive_path, 'r:gz') as tar:
-                tar.extractall(app_support)
+                # filter='data' запрещает пути вне app_support, симлинки наружу и setuid
+                tar.extractall(app_support, filter='data')
 
         # Удаляем архив
         try:
@@ -321,7 +336,7 @@ class LibreOfficeManager(QObject):
                                stderr=subprocess.DEVNULL)
                 subprocess.run(['chmod', '-R', '755', str(lo_app)], stderr=subprocess.DEVNULL)
                 subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(lo_app)],
-                               capture_output=True, stderr=subprocess.DEVNULL)
+                               capture_output=True)
 
     def start_auto_install(self):
         """
