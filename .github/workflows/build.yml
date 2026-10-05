@@ -18,9 +18,9 @@ jobs:
       - id: m
         shell: bash
         run: |
-          win='{"os":"windows-latest","artifact":"FileConverterPro_Windows","asset":"dist/FileConverterPro"}'
-          lin='{"os":"ubuntu-latest","artifact":"FileConverterPro_Linux","asset":"dist/FileConverterPro"}'
-          mac='{"os":"macos-latest","artifact":"FileConverterPro_macOS","asset":"dist/FileConverterPro.app"}'
+          win='{"os":"windows-latest","artifact":"FileConverterPro_Windows"}'
+          lin='{"os":"ubuntu-latest","artifact":"FileConverterPro_Linux"}'
+          mac='{"os":"macos-latest","artifact":"FileConverterPro_macOS"}'
           if [[ "$GITHUB_REF" == refs/tags/* || "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             list="[$win,$lin,$mac]"
           else
@@ -79,15 +79,37 @@ jobs:
       - name: Build
         run: python build.py
 
-      # Сборка может быть «зелёной», а приложение — падать при запуске (например, если PyInstaller
-      # не захватил модуль). Запускаем собранную программу так, как её получат пользователи.
-      - name: Self-test of the built app
+      # В архиве — сама папка приложения, а не её содержимое. ditto и zip -y сохраняют символические
+      # ссылки: без них .app на маке распаковывается неполным и с испорченной подписью
+      - name: Package into zip
         shell: bash
         run: |
+          cd dist
           case "$RUNNER_OS" in
-            Windows) run=(timeout 300 dist/FileConverterPro/FileConverterPro.exe) ;;
-            Linux)   run=(timeout 300 xvfb-run -a dist/FileConverterPro/FileConverterPro) ;;
-            macOS)   run=(perl -e 'alarm 300; exec @ARGV' dist/FileConverterPro.app/Contents/MacOS/FileConverterPro) ;;
+            macOS)   ditto -c -k --keepParent FileConverterPro.app "$artifact.zip" ;;
+            Linux)   zip -qry "$artifact.zip" FileConverterPro ;;
+            Windows) python -m zipfile -c "$artifact.zip" FileConverterPro ;;
+          esac
+          echo "Создан $artifact.zip: $(( $(wc -c < "$artifact.zip") / 1048576 )) МБ"
+        env:
+          artifact: ${{ matrix.artifact }}
+
+      # Сборка может быть «зелёной», а приложение — падать при запуске (PyInstaller не захватил модуль,
+      # упаковка потеряла файлы). Проверяем ровно то, что скачают пользователи: распакованный zip.
+      - name: Self-test of the app from the zip
+        shell: bash
+        env:
+          artifact: ${{ matrix.artifact }}
+        run: |
+          out="$RUNNER_TEMP/unzipped"
+          case "$RUNNER_OS" in
+            Windows) python -m zipfile -e "dist/$artifact.zip" "$out"
+                     run=(timeout 300 "$out/FileConverterPro/FileConverterPro.exe") ;;
+            Linux)   unzip -q "dist/$artifact.zip" -d "$out"
+                     run=(timeout 300 xvfb-run -a "$out/FileConverterPro/FileConverterPro") ;;
+            macOS)   ditto -x -k "dist/$artifact.zip" "$out"
+                     codesign --verify --deep --strict "$out/FileConverterPro.app"   # подпись цела, иначе шаг упадёт
+                     run=(perl -e 'alarm 300; exec @ARGV' "$out/FileConverterPro.app/Contents/MacOS/FileConverterPro") ;;
           esac
           report="$RUNNER_TEMP/selftest.txt"
           set +e
@@ -183,32 +205,6 @@ jobs:
           set -e
           if [ -f "$report" ]; then cat "$report"; else echo "Отчёта нет — AppImage упал при запуске (код $rc)"; fi
           exit $rc
-
-      - name: Package into zip
-        shell: bash
-        run: |
-          python << 'PYEOF'
-          import zipfile, os, sys
-          from pathlib import Path
-          asset = os.environ["asset"]          # e.g. dist/FileConverterPro.app
-          art   = os.environ["artifact"]       # e.g. FileConverterPro_macOS
-          src = Path(asset)
-          out_dir = Path("dist")
-          out_zip = out_dir / f"{art}.zip"
-          out_zip.parent.mkdir(parents=True, exist_ok=True)
-          with zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED) as z:
-              if src.is_dir():
-                  # Упаковываем содержимое папки (корень записи = содержимое)
-                  for p in src.rglob("*"):
-                      if p.is_file():
-                          z.write(p, p.relative_to(src))
-              else:
-                  z.write(src, src.name)
-          print(f"Created {out_zip} ({out_zip.stat().st_size/1024/1024:.0f} MB)")
-          PYEOF
-        env:
-          artifact: ${{ matrix.artifact }}
-          asset: ${{ matrix.asset }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
