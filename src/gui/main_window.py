@@ -11,13 +11,14 @@ from PySide6.QtWidgets import (
     QFileDialog, QTextEdit, QApplication, QScrollArea,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFontDatabase, QShortcut, QKeySequence
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFontDatabase, QShortcut, QKeySequence, QPalette
 
 from src.converters.factory import ConverterFactory
 from src.core.job_manager import JobManager, ConversionJob, JobStatus
 from src.core.libreoffice_manager import LibreOfficeManager
 from src.core.settings import Settings
 from src.gui.styles import get_stylesheet_for, get_palette_for, RED
+from src.gui.mac_titlebar import style_titlebar
 from src.gui.glass import (
     PrimaryButton, IconButton, GlassCombo, GlassSpin, GlassSlider, Toggle, GlassProgress,
     TabBar, FadeStack, FileList, Toast, GlassPopup, InsetSection, Row, SliderRow, PageHeader,
@@ -191,6 +192,7 @@ class MainWindow(QMainWindow):
             return
         app.setPalette(get_palette_for(mode))
         app.setStyleSheet(get_stylesheet_for(mode))
+        self._style_titlebar()
 
     def apply_theme_from_settings(self):
         """Применяет тему из сохранённых настроек при запуске."""
@@ -204,18 +206,11 @@ class MainWindow(QMainWindow):
         """Обработчик смены темы в настройках — применяет сразу."""
         self.apply_theme(mode)
 
-    # Шапка окна на маке прозрачная и стала частью интерфейса — повторяем её поведение сами
-    TITLE_STRIP = 38
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and event.position().y() < self.TITLE_STRIP:
-            self.windowHandle().startSystemMove()
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        if event.position().y() < self.TITLE_STRIP:
-            self.showNormal() if self.isMaximized() else self.showMaximized()
-        super().mouseDoubleClickEvent(event)
+    def _style_titlebar(self):
+        """На маке — родная шапка окна цвета фона: перетаскивание и двойной клик делает сама macOS."""
+        mode = self.settings.get('theme', 'system')
+        style_titlebar(self, get_palette_for(mode).color(QPalette.ColorRole.Window),
+                       None if mode == 'system' else mode == 'dark')
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -224,7 +219,7 @@ class MainWindow(QMainWindow):
     def _place_overlays(self):
         """Панель вкладок и уведомления плавают поверх страниц у нижнего края."""
         c = self.centralWidget()
-        self.tabs.move((c.width() - self.tabs.width()) // 2, c.height() - self.tabs.height() - 4)
+        self.tabs.move((c.width() - self.tabs.width()) // 2, c.height() - self.tabs.height() - 8)
         self.tabs.raise_()
         self.toast.reposition()
 
@@ -234,6 +229,8 @@ class MainWindow(QMainWindow):
             return
         self._shown_once = True
         self._place_overlays()
+        # Внутри цикла событий: у AppKit там есть autorelease pool
+        QTimer.singleShot(0, self._style_titlebar)
         self.setWindowOpacity(0.0)
         self._fade_in = QPropertyAnimation(self, b"windowOpacity", self)
         self._fade_in.setDuration(260)
@@ -247,15 +244,11 @@ class MainWindow(QMainWindow):
         self.resize(980, 780)
         self.setMinimumSize(760, 620)
         mac = sys.platform == 'darwin'
-        if mac:
-            # Контент уходит под прозрачную шапку окна, «светофор» лежит поверх — как у нативных приложений
-            self.setWindowFlag(Qt.WindowType.ExpandedClientAreaHint, True)
-            self.setWindowFlag(Qt.WindowType.NoTitleBarBackgroundHint, True)
 
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, self.TITLE_STRIP if mac else 14, 0, 0)
+        main_layout.setContentsMargins(0, 4 if mac else 14, 0, 0)   # на маке сверху родная шапка окна
 
         self.pages = FadeStack()
         main_layout.addWidget(self.pages)
@@ -266,6 +259,7 @@ class MainWindow(QMainWindow):
 
         self.tabs = TabBar([("Конвертер", "arrows"), ("Настройки", "gear"), ("Журнал", "list")], central)
         self.tabs.currentChanged.connect(self.pages.setCurrentIndex)
+        self.tabs.backdrop_source = self.pages      # стекло панели преломляет содержимое страниц
         self.toast = Toast(central)
 
         # ⌘1–⌘3 — вкладки, ⌘O — добавить файлы (Ctrl на Windows и Linux)
@@ -311,6 +305,7 @@ class MainWindow(QMainWindow):
         self.file_list.setMinimumHeight(200)
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self.show_file_context_menu)
+        self.file_list.browseRequested.connect(lambda: QTimer.singleShot(0, self.add_files))
         self.file_group.add(self.file_list, 1)
         layout.addWidget(self.file_group, 1)
 
@@ -321,7 +316,7 @@ class MainWindow(QMainWindow):
         self.convert_btn = PrimaryButton("Конвертировать")
         self.convert_btn.clicked.connect(self.start_conversion)
         self.convert_btn.setEnabled(False)
-        self.convert_btn.setFixedSize(320, 52)
+        self.convert_btn.setFixedSize(self.convert_btn.sizeHint())   # с полем под «подъём» при нажатии
         layout.addWidget(self.convert_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # Включаем Drag & Drop

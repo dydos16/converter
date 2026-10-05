@@ -17,10 +17,11 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import (
-    Qt, QRectF, QPointF, QPoint, QSize, QTimer, QEasingCurve, QVariantAnimation, Signal,
+    Qt, QRect, QRectF, QPointF, QPoint, QSize, QTimer, QEasingCurve, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import (
-    QPainter, QPainterPath, QColor, QLinearGradient, QPen, QPalette, QFont, QFontMetrics, QPixmap,
+    QPainter, QPainterPath, QColor, QLinearGradient, QRadialGradient, QPen, QPalette, QFont, QFontMetrics,
+    QPixmap, QImage, QCursor,
 )
 from PySide6.QtWidgets import (
     QApplication, QWidget, QPushButton, QComboBox, QSpinBox, QCheckBox, QSlider, QListWidget,
@@ -85,13 +86,15 @@ def painter(widget: QWidget) -> QPainter:
     return p
 
 
-_SHADOW_PAD = 16
+_SHADOW_PAD = 36
 _shadow_cache: dict = {}
 
 
-def _shadow_pixmap(size, radius: float, color: QColor, dpr: float) -> QPixmap:
-    """Мягкая тень вокруг плашки. Рисуется один раз на размер и цвет, дальше — из кэша."""
-    key = (round(size.width()), round(size.height()), round(radius), color.rgba(), dpr)
+def _shadow_pixmap(size, radius: float, color: QColor, dpr: float, reach: float = 33.0) -> QPixmap:
+    """Мягкая тень вокруг плашки (как у Telegram: размытие ~30–40 pt, едва заметная).
+    reach — как далеко тень выходит за плашку: должна помещаться в виджет, иначе обрежется квадратом.
+    Рисуется один раз на размер и цвет, дальше — из кэша."""
+    key = (round(size.width()), round(size.height()), round(radius), color.rgba(), dpr, round(reach))
     pm = _shadow_cache.get(key)
     if pm is not None:
         return pm
@@ -105,10 +108,13 @@ def _shadow_pixmap(size, radius: float, color: QColor, dpr: float) -> QPixmap:
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setPen(Qt.PenStyle.NoPen)
     body = QRectF(_SHADOW_PAD, _SHADOW_PAD, size.width(), size.height())
-    for spread, k in ((1.0, .55), (3.0, .30), (6.0, .15), (11.0, .07)):
+    # Набор расширяющихся слоёв ≈ гауссова тень, смещённая на 1 pt вниз
+    f = min(reach, _SHADOW_PAD - 2) / 33
+    for spread, k in ((1.5, .30), (4, .24), (8, .18), (13, .12), (19, .08), (26, .05), (33, .03)):
+        spread *= f
         p.setBrush(alpha(color, color.alphaF() * k))
-        r = body.adjusted(-spread * .6, spread * .5, spread * .6, spread)
-        p.drawRoundedRect(r, radius + spread * .6, radius + spread * .6)
+        r = body.adjusted(-spread, -spread + f, spread, spread + f)
+        p.drawRoundedRect(r, radius + spread, radius + spread)
     # Под самим стеклом тени нет — иначе она бы его затемнила
     p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
     p.setBrush(Qt.GlobalColor.black)
@@ -118,29 +124,8 @@ def _shadow_pixmap(size, radius: float, color: QColor, dpr: float) -> QPixmap:
     return pm
 
 
-def paint_glass(p: QPainter, rect: QRectF, radius: float, t: dict,
-                top: QColor, bottom: QColor, shadow: QColor | None = None,
-                rim_top: QColor | None = None, rim_bottom: QColor | None = None) -> QPainterPath:
-    """Стеклянная плашка: мягкая тень снаружи, заливка, светлая кромка сверху."""
-    body = rounded(rect, radius)
-    if shadow is not None and shadow.alphaF() > 0:
-        p.drawPixmap(rect.topLeft() - QPointF(_SHADOW_PAD, _SHADOW_PAD),
-                     _shadow_pixmap(rect.size(), radius, shadow, p.device().devicePixelRatioF()))
-    g = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-    g.setColorAt(0, top)
-    g.setColorAt(1, bottom)
-    p.fillPath(body, g)
-    rg = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-    rg.setColorAt(0, rim_top or t["rim_top"])
-    rg.setColorAt(1, rim_bottom or t["rim_bottom"])
-    p.setPen(QPen(rg, 1))
-    p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawPath(rounded(rect.adjusted(.5, .5, -.5, -.5), max(0.0, radius - .5)))
-    return body
-
-
 class Tween:
-    """Одно анимируемое число; каждый шаг перерисовывает владельца."""
+    """Одно анимируемое число по кривой; каждый шаг перерисовывает владельца."""
 
     def __init__(self, owner: QWidget, ms: int = 180, value: float = 0.0):
         self.value = value
@@ -171,6 +156,226 @@ class Tween:
         self._owner.update()
 
 
+# --------------------------------------------------------------------------- #
+#  Жидкое стекло — по мотивам реализации Telegram для iOS
+#  (Telegram-iOS: GlassBackgroundComponent, LegacyGlassView, TouchEffect, LiquidLens)
+# --------------------------------------------------------------------------- #
+
+# Пружины Telegram: (масса, жёсткость, демпфирование)
+LIFT_ON = (1.36, 568.0, 39.7)     # «подъём» стекла при нажатии — быстро, без перелёта
+LIFT_OFF = (2.0, 460.0, 21.8)     # возврат — с заметным пружинящим перелётом
+
+
+def is_dark() -> bool:
+    return QApplication.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+
+class Spring:
+    """Затухающий осциллятор, как анимации стекла в Telegram, вместо кривых QEasingCurve."""
+
+    def __init__(self, owner: QWidget, value: float = 0.0, params=LIFT_OFF):
+        self.value = self.target = float(value)
+        self.velocity = 0.0
+        self.params = params
+        self._owner = owner
+        self._timer = QTimer(owner)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setInterval(8)
+        self._timer.timeout.connect(self._tick)
+        self._last = 0.0
+
+    @property
+    def moving(self) -> bool:
+        return self._timer.isActive()
+
+    def to(self, target: float, params=None):
+        self.target = float(target)
+        if params:
+            self.params = params
+        if not self._timer.isActive():
+            self._last = time.perf_counter()
+            self._timer.start()
+
+    def jump(self, value: float):
+        self.value = self.target = float(value)
+        self.velocity = 0.0
+        self._timer.stop()
+        self._owner.update()
+
+    def _tick(self):
+        now = time.perf_counter()
+        dt = min(.05, now - self._last)
+        self._last = now
+        m, k, c = self.params
+        steps = max(1, int(dt / .002))       # мелкие шаги — жёсткая пружина устойчива
+        h = dt / steps
+        for _ in range(steps):
+            a = (-k * (self.value - self.target) - c * self.velocity) / m
+            self.velocity += a * h
+            self.value += self.velocity * h
+        if abs(self.value - self.target) < 1e-3 and abs(self.velocity) < 1e-2:
+            self.value, self.velocity = self.target, 0.0
+            self._timer.stop()
+        self._owner.update()
+
+
+def jelly(w: float, h: float, stretch: QPointF, base: float) -> tuple[float, float, float, float]:
+    """Растяжение «желе» вслед за курсором: (scale_x, scale_y, dx, dy).
+    Формула из TouchEffect.swift: объём сохраняется, сдвиг до 24 pt."""
+    h = max(1.0, h)
+    aspect = w / h
+    ax = stretch.x() / aspect
+    length = math.hypot(ax, stretch.y())
+    if length < 1e-6:
+        return base, base, 0.0, 0.0
+    nx, ny = ax / length, stretch.y() / length
+    k = 1 - 1 / ((length / h) / (5 * aspect) + 1)
+    t = ((h + 16 / aspect) / h - 1) * k * aspect
+    if abs(nx) > abs(ny):
+        d = abs(nx) - abs(ny)
+        sx, sy = base * (1 + t * d), base / (1 + t * d)
+    else:
+        d = abs(ny) - abs(nx)
+        sx, sy = base / (1 + t * d), base * (1 + t * d)
+    return sx, sy, nx * 24 * k, ny * 24 * k
+
+
+def _bezier_y(x: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    """Кубическая Безье (как CSS cubic-bezier): y по x."""
+    lo, hi = 0.0, 1.0
+    for _ in range(20):
+        s = (lo + hi) / 2
+        bx = 3 * (1 - s) ** 2 * s * x1 + 3 * (1 - s) * s ** 2 * x2 + s ** 3
+        lo, hi = (s, hi) if bx < x else (lo, s)
+    s = (lo + hi) / 2
+    return 3 * (1 - s) ** 2 * s * y1 + 3 * (1 - s) * s ** 2 * y2 + s ** 3
+
+
+def glass_fill(dark: bool) -> QColor:
+    """Заливка панели Telegram: белый 70% или почти чёрный (белый, смешанный с 89% чёрного) 85%."""
+    return QColor(28, 28, 28, 217) if dark else QColor(255, 255, 255, 179)
+
+
+def _rim_path(rect: QRectF, radius: float, lw: float) -> QPainterPath:
+    """Кромка стекла как у Telegram: у верхнего левого и нижнего правого углов радиус полный,
+    у двух других — чуть меньше. После обрезки по форме блик остаётся на двух углах по диагонали."""
+    r = rect.adjusted(lw / 2, lw / 2, -lw / 2, -lw / 2)
+    big = max(0.0, min(radius - lw / 2, r.width() / 2, r.height() / 2))
+    small = max(0.0, big - lw * 1.33)
+    path = QPainterPath(QPointF(r.left(), r.top() + big))
+    path.arcTo(QRectF(r.left(), r.top(), 2 * big, 2 * big), 180, -90)
+    path.lineTo(r.right() - small, r.top())
+    path.arcTo(QRectF(r.right() - 2 * small, r.top(), 2 * small, 2 * small), 90, -90)
+    path.lineTo(r.right(), r.bottom() - big)
+    path.arcTo(QRectF(r.right() - 2 * big, r.bottom() - 2 * big, 2 * big, 2 * big), 0, -90)
+    path.lineTo(r.left() + small, r.bottom())
+    path.arcTo(QRectF(r.left(), r.bottom() - 2 * small, 2 * small, 2 * small), 270, -90)
+    path.closeSubpath()
+    return path
+
+
+def frost(pm: QPixmap, blur_px: int) -> QPixmap:
+    """Фон под стеклом: лёгкое размытие и усиленная насыщенность (в Telegram — 2 pt и матрица ×2)."""
+    img = pm.toImage().convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    w, h = img.width(), img.height()
+    if blur_px > 1 and w > blur_px and h > blur_px:
+        small = img.scaled(w // blur_px, h // blur_px, Qt.AspectRatioMode.IgnoreAspectRatio,
+                           Qt.TransformationMode.SmoothTransformation)
+        img = small.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    p = QPainter(img)
+    p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Overlay)   # наложение на себя = ярче цвета
+    p.setOpacity(.35)
+    p.drawImage(0, 0, img.copy())
+    p.end()
+    out = QPixmap.fromImage(img)
+    out.setDevicePixelRatio(pm.devicePixelRatio())
+    return out
+
+
+REFRACT_BAND = 12.0        # ширина полосы преломления у края, pt
+REFRACT_SHIFT = 20.0       # насколько сдвигается фон у самого края, pt
+_REFRACT_RINGS = 6
+_ring_cache: dict = {}
+
+
+def _refraction_rings(rect: QRectF, radius: float) -> list[tuple[QPainterPath, float, float]]:
+    """Кольца от края к центру и масштаб фона в каждом — вместо сетки meshTransform Telegram."""
+    key = (round(rect.x(), 1), round(rect.y(), 1), round(rect.width(), 1), round(rect.height(), 1), round(radius, 1))
+    rings = _ring_cache.get(key)
+    if rings is not None:
+        return rings
+    if len(_ring_cache) > 128:
+        _ring_cache.clear()
+    band = min(REFRACT_BAND, radius, rect.width() / 2, rect.height() / 2)
+    step = band / _REFRACT_RINGS
+    rings = []
+    for i in range(_REFRACT_RINGS):
+        e = i * step
+        outer = rounded(rect.adjusted(e, e, -e, -e), max(0.0, radius - e))
+        inner = rounded(rect.adjusted(e + step, e + step, -e - step, -e - step), max(0.0, radius - e - step))
+        k = 1 - (e + step / 2) / band                                 # 1 у края → 0 к середине
+        shift = REFRACT_SHIFT * _bezier_y(k, .816, .205, .581, .873)  # кривая смещения из LegacyGlassView
+        # У края показываем фон, лежащий дальше наружу, — сжимаем его к центру
+        sx = 1 / (1 + shift / max(1.0, rect.width() / 2))
+        sy = 1 / (1 + shift / max(1.0, rect.height() / 2))
+        rings.append((outer.subtracted(inner), sx, sy))
+    _ring_cache[key] = rings
+    return rings
+
+
+def _draw_refracted(p: QPainter, pm: QPixmap, origin: QPointF, rect: QRectF, radius: float) -> None:
+    c = rect.center()
+    p.save()
+    p.setClipPath(rounded(rect, radius))
+    p.drawPixmap(origin, pm)
+    for ring, sx, sy in _refraction_rings(rect, radius):
+        p.save()
+        p.setClipPath(ring)
+        p.translate(c)
+        p.scale(sx, sy)
+        p.translate(-c)
+        p.drawPixmap(origin, pm)
+        p.restore()
+    p.restore()
+
+
+def grab_backdrop(source: QWidget, widget: QWidget, rect: QRectF, blur_px: int = 4):
+    """Снимок того, что лежит под стеклом (source — виджет ниже, в том же окне),
+    с полями под преломление. Возвращает (pixmap, точка в координатах widget) или None."""
+    margin = REFRACT_SHIFT + 4
+    area = rect.adjusted(-margin, -margin, margin, margin).toAlignedRect()
+    win = widget.window()
+    src_tl = source.mapFrom(win, widget.mapTo(win, area.topLeft()))
+    region = QRect(src_tl, area.size()).intersected(source.rect())
+    if region.isEmpty():
+        return None
+    pm = source.grab(region)
+    return frost(pm, blur_px), QPointF(area.topLeft() + (region.topLeft() - src_tl))
+
+
+def paint_liquid_glass(p: QPainter, rect: QRectF, radius: float, *, fill: QColor | None = None,
+                       backdrop=None, rim: QColor | None = None, shadow: QColor | None = None,
+                       reach: float = 33.0) -> QPainterPath:
+    """Стекло как у Telegram: тень → преломлённый фон → полупрозрачная заливка → кромка 0,8 pt."""
+    dark = is_dark()
+    body = rounded(rect, radius)
+    shadow = shadow if shadow is not None else QColor(0, 0, 0, 100 if dark else 22)
+    if shadow.alpha():
+        p.drawPixmap(rect.topLeft() - QPointF(_SHADOW_PAD, _SHADOW_PAD),
+                     _shadow_pixmap(rect.size(), radius, shadow, p.device().devicePixelRatioF(), reach))
+    if backdrop is not None:
+        _draw_refracted(p, backdrop[0], backdrop[1], rect, radius)
+    p.fillPath(body, fill if fill is not None else glass_fill(dark))
+    lw = .8
+    p.save()
+    p.setClipPath(body)
+    p.setPen(QPen(rim if rim is not None else QColor(255, 255, 255, 38 if dark else 153), lw))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawPath(_rim_path(rect, radius, lw))
+    p.restore()
+    return body
+
+
 class _Hoverable:
     """Плавная подсветка при наведении для любого QWidget."""
 
@@ -186,27 +391,64 @@ class _Hoverable:
         super().leaveEvent(e)
 
 
-class _Pressable(_Hoverable):
-    """Наведение + «вдавливание» с пружинкой при отпускании."""
+class _GlassTouch(_Hoverable):
+    """Отклик стекла на нажатие, как TouchEffect в Telegram: элемент «поднимается» (растёт),
+    тянется за курсором как желе, под курсором — мягкое свечение; при отпускании пружинит назад."""
+    LIFT = 20.0        # pressedSizeIncrease: на сколько pt вырастает больший размер
+    MAX_SHIFT = 24.0   # насколько желе может сместиться за курсором
 
-    def _init_press(self):
+    def _init_touch(self):
         self._init_hover()
-        self._press = Tween(self, 110)
+        self._lift = Spring(self)
+        self._stretch_x = Spring(self)
+        self._stretch_y = Spring(self)
+        self._glow = Tween(self, 120)
+        self._touch = QPointF()
+        self._press_pos: QPointF | None = None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mousePressEvent(self, e):
-        self._press.to(1, 90)
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = QPointF(e.position())
+            self._touch = QPointF(e.position())
+            self._lift.to(1, LIFT_ON)
+            self._glow.to(1, 120)
         super().mousePressEvent(e)
 
+    def mouseMoveEvent(self, e):
+        if self._press_pos is not None:
+            d = e.position() - self._press_pos
+            self._stretch_x.to(d.x(), LIFT_ON)
+            self._stretch_y.to(d.y(), LIFT_ON)
+            self._touch = QPointF(e.position())
+        super().mouseMoveEvent(e)
+
     def mouseReleaseEvent(self, e):
-        self._press.to(0, 380, SPRING)
+        self._press_pos = None
+        self._lift.to(0, LIFT_OFF)
+        self._stretch_x.to(0, LIFT_OFF)
+        self._stretch_y.to(0, LIFT_OFF)
+        self._glow.to(0, 220)
         super().mouseReleaseEvent(e)
 
-    def _scale(self, p: QPainter, r: QRectF, depth: float = .05):
-        s = 1 - depth * self._press.value
-        p.translate(r.center())
-        p.scale(s, s)
-        p.translate(-r.center())
+    def _apply_touch(self, p: QPainter, r: QRectF):
+        """Подъём + желе: сдвигает и масштабирует painter вокруг центра стекла."""
+        base = 1 + self.LIFT * self._lift.value / max(r.width(), r.height())
+        sx, sy, dx, dy = jelly(r.width(), r.height(), QPointF(self._stretch_x.value, self._stretch_y.value), base)
+        k = self.MAX_SHIFT / 24
+        c = r.center()
+        p.translate(c.x() + dx * k, c.y() + dy * k)
+        p.scale(sx, sy)
+        p.translate(-c.x(), -c.y())
+
+    def _paint_glow(self, p: QPainter, shape: QPainterPath):
+        a = self._glow.value
+        if a <= 0:
+            return
+        g = QRadialGradient(self._touch, 150)
+        g.setColorAt(0, QColor(255, 255, 255, int(255 * .5 * .14 * a)))   # Telegram: 0,5 × непрозрачность 0,1
+        g.setColorAt(1, QColor(255, 255, 255, 0))
+        p.fillPath(shape, g)
 
 
 # --------------------------------------------------------------------------- #
@@ -487,128 +729,250 @@ class PageHeader(QWidget):
 #  Кнопки
 # --------------------------------------------------------------------------- #
 
-class PrimaryButton(_Pressable, QPushButton):
-    """Синяя кнопка-капсула главного действия."""
+class PrimaryButton(_GlassTouch, QPushButton):
+    """Синяя кнопка-капсула главного действия: окрашенное стекло, «поднимается» при нажатии."""
+    LIFT = 20.0
+    MAX_SHIFT = 6.0
+    BODY = QSize(316, 50)
+    MARGIN = QSize(22, 16)   # поле под подъём, желе и тень
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
-        self._init_press()
+        self._init_touch()
 
     def sizeHint(self) -> QSize:
-        return QSize(QFontMetrics(font(15, QFont.Weight.DemiBold)).horizontalAdvance(self.text()) + 56, 50)
+        return self.BODY + self.MARGIN * 2
+
+    def _body(self) -> QRectF:
+        r = QRectF(self.rect())
+        return QRectF(r.center().x() - self.BODY.width() / 2, r.center().y() - self.BODY.height() / 2,
+                      self.BODY.width(), self.BODY.height())
+
+    def hitButton(self, pos) -> bool:
+        return self._body().contains(QPointF(pos))
 
     def paintEvent(self, e):
         t = T(self)
         p = painter(self)
-        r = QRectF(self.rect()).adjusted(2, 1, -2, -4)
-        self._scale(p, r, .03)
+        r = self._body()
         radius = r.height() / 2
         if not self.isEnabled():
             p.fillPath(rounded(r, radius), t["track"])
-            fg = t["disabled"]
-        else:
-            h = self._hover.value
-            body = paint_glass(p, r, radius, t, mix(QColor("#2B8CFF"), QColor("#4C9EFF"), h * .7),
-                               mix(ACCENT, QColor("#1A84FF"), h * .7),
-                               shadow=alpha(ACCENT, .28 + .2 * h - .15 * self._press.value),
-                               rim_top=QColor(255, 255, 255, 140), rim_bottom=QColor(0, 50, 140, 60))
-            gloss = QLinearGradient(r.topLeft(), QPointF(r.left(), r.center().y()))
-            gloss.setColorAt(0, QColor(255, 255, 255, 70))
-            gloss.setColorAt(1, QColor(255, 255, 255, 0))
-            p.fillPath(body, gloss)
-            fg = QColor("#FFFFFF")
+            p.setFont(font(15, QFont.Weight.DemiBold))
+            p.setPen(t["disabled"])
+            p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.text())
+            return
+        self._apply_touch(p, r)
+        h = self._hover.value
+        body = paint_liquid_glass(p, r, radius, fill=mix(ACCENT, QColor("#2B8CFF"), h),
+                                  rim=QColor(255, 255, 255, 110), shadow=alpha(ACCENT, .35), reach=10)
+        self._paint_glow(p, body)
         p.setFont(font(15, QFont.Weight.DemiBold))
-        p.setPen(fg)
+        p.setPen(QColor("#FFFFFF"))
         p.drawText(r, Qt.AlignmentFlag.AlignCenter, self.text())
 
 
-class IconButton(_Pressable, QPushButton):
-    """Круглая стеклянная кнопка со значком — как кнопки в навигации iOS 26."""
+class IconButton(_GlassTouch, QPushButton):
+    """Круглая стеклянная кнопка со значком — как кнопки навигации в Telegram для iOS 26."""
+    LIFT = 10.0
+    MAX_SHIFT = 4.0
+    D = 38
 
     def __init__(self, icon: str, tooltip: str = "", parent=None):
         super().__init__(parent)
         self._icon = icon
-        self._init_press()
+        self._init_touch()
         self.setToolTip(tooltip)
-        self.setFixedSize(44, 44)
+        self.setFixedSize(self.D + 24, self.D + 24)   # поле под «подъём», желе и тень
+
+    def _body(self) -> QRectF:
+        c = QRectF(self.rect()).center()
+        return QRectF(c.x() - self.D / 2, c.y() - self.D / 2, self.D, self.D)
+
+    def hitButton(self, pos) -> bool:
+        return self._body().adjusted(-3, -3, 3, 3).contains(QPointF(pos))
 
     def paintEvent(self, e):
         t = T(self)
         p = painter(self)
-        r = QRectF(self.rect()).adjusted(4, 3, -4, -5)
-        self._scale(p, r, .08)
-        paint_glass(p, r, r.height() / 2, t, mix(t["control"], t["control_hover"], self._hover.value),
-                    t["control"], shadow=alpha(t["shadow"], t["shadow"].alphaF() * .8))
+        r = self._body()
+        self._apply_touch(p, r)
+        fill = glass_fill(is_dark())
+        fill.setAlphaF(min(1.0, fill.alphaF() + .2 * self._hover.value))
+        body = paint_liquid_glass(p, r, r.height() / 2, fill=fill, reach=6)
+        self._paint_glow(p, body)
         color = t["text"] if self.isEnabled() else t["disabled"]
-        draw_icon(p, self._icon, r.adjusted(9, 9, -9, -9), color, 2.0)
+        draw_icon(p, self._icon, r.adjusted(10, 10, -10, -10), color, 2.0)
 
 
 # --------------------------------------------------------------------------- #
 #  Плавающая панель вкладок + стек страниц с плавной сменой
 # --------------------------------------------------------------------------- #
 
+class _ShadowOverlay(QWidget):
+    """Тень панели вкладок отдельным слоем, прозрачным для мыши:
+    иначе широкое поле под тень перехватывало бы клики по содержимому под ним."""
+
+    def __init__(self, parent: QWidget, radius: float):
+        super().__init__(parent)
+        self._radius = radius
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, e):
+        p = painter(self)
+        body = QRectF(self.rect()).adjusted(_SHADOW_PAD, _SHADOW_PAD, -_SHADOW_PAD, -_SHADOW_PAD)
+        color = QColor(0, 0, 0, 120 if is_dark() else 30)
+        p.drawPixmap(QPointF(0, 0), _shadow_pixmap(body.size(), self._radius, color, self.devicePixelRatioF()))
+
+
 class TabBar(QWidget):
-    """Стеклянная панель вкладок внизу окна, как в Telegram для iOS 26."""
+    """Плавающая стеклянная панель вкладок, как в Telegram для iOS 26.
+    За стеклом виден преломлённый у краёв контент страницы. Выбранная вкладка — «линза»:
+    её можно потащить мышью, поднятая линза увеличивает значки, а цвет значков
+    меняется ровно по её границе."""
     currentChanged = Signal(int)
-    MARGIN = 14      # поле под тень вокруг панели
-    PAD = 5
-    ITEM_W = 92
-    BAR_H = 58
+    INSET = 4          # отступ вкладок от края панели (innerInset)
+    ITEM_W = 96
+    ITEM_H = 56        # высота панели = 56 + 4 × 2
+    PAD = 6            # поле вокруг панели: под подъём линзы
+    LIFTED = 4         # насколько линза выходит за вкладку, когда её тащат
 
     def __init__(self, items: list[tuple[str, str]], parent=None):
         super().__init__(parent)
+        self.backdrop_source: QWidget | None = None
         self._items = items
         self._index = 0
         self._hover_i = -1
-        self._pos = Tween(self, 340)
-        self.setFixedSize(self.ITEM_W * len(items) + self.PAD * 2 + self.MARGIN * 2, self.BAR_H + self.MARGIN * 2)
+        self._pos = Spring(self, 0.0)       # положение линзы в «вкладках» (дробное)
+        self._lift = Spring(self)           # линзу подняли — её тащат
+        self._backdrop = None
+        self._backdrop_at = 0.0
+        bar_w = self.ITEM_W * len(items) + self.INSET * 2
+        bar_h = self.ITEM_H + self.INSET * 2
+        self.setFixedSize(bar_w + self.PAD * 2, bar_h + self.PAD * 2)
+        self._shadow = _ShadowOverlay(parent, bar_h / 2) if parent is not None else None
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    # --- геометрия
+    def _bar(self) -> QRectF:
+        return QRectF(self.rect()).adjusted(self.PAD, self.PAD, -self.PAD, -self.PAD)
+
+    def _item(self, i: float) -> QRectF:
+        b = self._bar()
+        return QRectF(b.left() + self.INSET + i * self.ITEM_W, b.top() + self.INSET, self.ITEM_W, self.ITEM_H)
+
+    def _index_at(self, x: float) -> float:
+        i = (x - self._bar().left() - self.INSET) / self.ITEM_W - .5
+        return max(0.0, min(len(self._items) - 1.0, i))
+
+    def moveEvent(self, e):
+        if self._shadow is not None:
+            self._shadow.setGeometry(self.geometry().adjusted(self.PAD - _SHADOW_PAD, self.PAD - _SHADOW_PAD,
+                                                              _SHADOW_PAD - self.PAD, _SHADOW_PAD - self.PAD))
+            self._shadow.stackUnder(self)
+        super().moveEvent(e)
+
+    # --- выбор
     def currentIndex(self) -> int:
         return self._index
-
-    def _at(self, x: float) -> int:
-        return max(0, min(len(self._items) - 1, int((x - self.MARGIN - self.PAD) // self.ITEM_W)))
 
     def setCurrentIndex(self, i: int):
         if i == self._index:
             return
         self._index = i
-        self._pos.to(i, 360, QEasingCurve.Type.OutQuint)
+        self._pos.to(i, LIFT_OFF)
         self.currentChanged.emit(i)
 
+    # --- мышь: нажали — линза поднимается и едет под курсор, тащим — следует за ним
     def mousePressEvent(self, e):
-        self.setCurrentIndex(self._at(e.position().x()))
+        if e.button() == Qt.MouseButton.LeftButton:
+            self._lift.to(1, LIFT_ON)
+            self._pos.to(self._index_at(e.position().x()), LIFT_ON)
 
     def mouseMoveEvent(self, e):
-        i = self._at(e.position().x())
-        if i != self._hover_i:
-            self._hover_i = i
-            self.update()
+        if e.buttons() & Qt.MouseButton.LeftButton:
+            self._pos.to(self._index_at(e.position().x()), LIFT_ON)
+        else:
+            i = round(self._index_at(e.position().x()))
+            if i != self._hover_i:
+                self._hover_i = i
+                self.update()
+
+    def mouseReleaseEvent(self, e):
+        i = round(self._index_at(e.position().x()))
+        self._lift.to(0, LIFT_OFF)
+        self._pos.to(i, LIFT_OFF)
+        if i != self._index:
+            self._index = i
+            self.currentChanged.emit(i)
 
     def leaveEvent(self, e):
         self._hover_i = -1
         self.update()
 
+    # --- отрисовка
+    def _get_backdrop(self, bar: QRectF):
+        if self.backdrop_source is None:
+            return None
+        # Пока анимируется сама панель, фон под ней не меняется — берём снимок из кэша
+        animating = self._pos.moving or self._lift.moving
+        if self._backdrop is None or not animating or time.perf_counter() - self._backdrop_at > .2:
+            self._backdrop = grab_backdrop(self.backdrop_source, self, bar, blur_px=4)
+            self._backdrop_at = time.perf_counter()
+        return self._backdrop
+
+    def _paint_items(self, p: QPainter, t: dict, selected: bool):
+        for i, (label, icon) in enumerate(self._items):
+            r = self._item(i)
+            if selected:
+                color = ACCENT
+            else:
+                color = t["text"] if self._hover_i == i else mix(t["text"], t["secondary"], .3)
+            draw_icon(p, icon, QRectF(r.center().x() - 13, r.top() + 7, 26, 26), color, 1.9)
+            p.setFont(font(11, QFont.Weight.DemiBold))
+            p.setPen(color)
+            p.drawText(QRectF(r.left(), r.bottom() - 8 - 14, r.width(), 14), Qt.AlignmentFlag.AlignCenter, label)
+
     def paintEvent(self, e):
         t = T(self)
         p = painter(self)
-        bar = QRectF(self.MARGIN, self.MARGIN, self.width() - self.MARGIN * 2, self.BAR_H)
-        paint_glass(p, bar, bar.height() / 2, t, t["bar"], alpha(t["bar"], t["bar"].alphaF() * .94),
-                    shadow=alpha(t["shadow"], t["shadow"].alphaF() * 1.4))
-        pill = QRectF(bar.left() + self.PAD + self._pos.value * self.ITEM_W, bar.top() + self.PAD,
-                      self.ITEM_W, bar.height() - self.PAD * 2)
-        p.fillPath(rounded(pill, pill.height() / 2), t["thumb"])
-        for i, (label, icon) in enumerate(self._items):
-            x = bar.left() + self.PAD + i * self.ITEM_W
-            near = max(0.0, 1 - abs(self._pos.value - i))   # насколько индикатор над этой вкладкой
-            base = t["text"] if self._hover_i == i else mix(t["text"], t["secondary"], .35)
-            color = mix(base, ACCENT, near)
-            draw_icon(p, icon, QRectF(x + self.ITEM_W / 2 - 12, bar.top() + 8, 24, 24), color, 1.9)
-            p.setFont(font(11, QFont.Weight.DemiBold if near > .5 else QFont.Weight.Medium))
-            p.setPen(color)
-            p.drawText(QRectF(x, bar.top() + 34, self.ITEM_W, 16), Qt.AlignmentFlag.AlignCenter, label)
+        dark = is_dark()
+        bar = self._bar()
+        bar_shape = paint_liquid_glass(p, bar, bar.height() / 2, backdrop=self._get_backdrop(bar),
+                                       shadow=QColor(0, 0, 0, 0))
+        lift = max(0.0, self._lift.value)
+        grow = self.LIFTED * lift
+        lens = self._item(self._pos.value).adjusted(-grow, -grow, grow, grow)
+        lens_shape = rounded(lens, lens.height() / 2)
+
+        # Подложка выбранной вкладки в покое: чёрный 7,5% / белый 10%; когда линзу тащат — исчезает
+        rest = max(0.0, 1 - lift)
+        if rest > 0:
+            tint = QColor(255, 255, 255) if dark else QColor(0, 0, 0)
+            p.fillPath(lens_shape, alpha(tint, (.10 if dark else .075) * rest))
+
+        # Вне линзы — обычный цвет, внутри — синий: цвет меняется ровно по её границе
+        p.save()
+        p.setClipPath(bar_shape.subtracted(lens_shape))
+        self._paint_items(p, t, selected=False)
+        p.restore()
+        p.save()
+        p.setClipPath(lens_shape)
+        if lift > 0:   # поднятая линза увеличивает то, что под ней (×1,15, как значок в Telegram)
+            c = lens.center()
+            s = 1 + .15 * min(1.0, lift)
+            p.translate(c)
+            p.scale(s, s)
+            p.translate(-c)
+        self._paint_items(p, t, selected=True)
+        p.restore()
+
+        if lift > .01:   # сама линза — прозрачное стекло с кромкой и тенью
+            k = min(1.0, lift)
+            paint_liquid_glass(p, lens, lens.height() / 2, fill=QColor(255, 255, 255, int((10 if dark else 40) * k)),
+                               rim=QColor(255, 255, 255, int((90 if dark else 220) * k)),
+                               shadow=QColor(0, 0, 0, int((90 if dark else 26) * k)), reach=5)
 
 
 class FadeStack(QStackedWidget):
@@ -708,14 +1072,34 @@ class GlassSpin(_Hoverable, QSpinBox):
             p.drawPath(rounded(r.adjusted(.5, .5, -.5, -.5), 8.5))
 
 
+def _glass_knob(p: QPainter, knob: QRectF, lift: float, reach: float) -> None:
+    """Ручка тумблера и ползунка, как в iOS 26: в покое белая, при нажатии
+    расплывается в прозрачную стеклянную линзу, сквозь которую видно дорожку."""
+    k = max(0.0, min(1.0, lift))
+    radius = knob.height() / 2
+    p.drawPixmap(knob.topLeft() - QPointF(_SHADOW_PAD, _SHADOW_PAD),
+                 _shadow_pixmap(knob.size(), radius, QColor(0, 0, 0, int(70 - 40 * k)),
+                                p.device().devicePixelRatioF(), reach))
+    shape = rounded(knob, radius)
+    p.fillPath(shape, QColor(255, 255, 255, int(255 * (1 - .8 * k))))
+    if k > 0:
+        p.save()
+        p.setClipPath(shape)
+        p.setPen(QPen(QColor(255, 255, 255, int(235 * k)), 1.0))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(_rim_path(knob, radius, 1.0))
+        p.restore()
+
+
 class Toggle(QCheckBox):
-    """Переключатель iOS. Подпись — в строке слева, сам тумблер без текста."""
-    W, H = 44, 26
+    """Переключатель iOS 26. Подпись — в строке слева, сам тумблер без текста."""
+    W, H = 46, 28
 
     def __init__(self, parent=None):
         super().__init__("", parent)
-        self._pos = Tween(self, 240)
-        self.toggled.connect(lambda on: self._pos.to(1 if on else 0, 300, SPRING if on else OUT))
+        self._pos = Spring(self)
+        self._lift = Spring(self)
+        self.toggled.connect(lambda on: self._pos.to(1 if on else 0, LIFT_OFF))
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def setChecked(self, on: bool):
@@ -724,25 +1108,31 @@ class Toggle(QCheckBox):
             self._pos.jump(1 if on else 0)
 
     def sizeHint(self) -> QSize:
-        return QSize(self.W + 2, self.H + 4)
+        return QSize(self.W + 16, self.H + 16)   # поле под расплывшуюся ручку и её тень
 
     def hitButton(self, pos) -> bool:
         return self.rect().contains(pos)
+
+    def mousePressEvent(self, e):
+        self._lift.to(1, LIFT_ON)
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        self._lift.to(0, LIFT_OFF)
+        super().mouseReleaseEvent(e)
 
     def paintEvent(self, e):
         t = T(self)
         p = painter(self)
         k = self._pos.value
-        track = QRectF(1, (self.height() - self.H) / 2, self.W, self.H)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(mix(t["track"], GREEN, k))
-        p.drawRoundedRect(track, self.H / 2, self.H / 2)
+        lift = max(0.0, self._lift.value)
+        track = QRectF((self.width() - self.W) / 2, (self.height() - self.H) / 2, self.W, self.H)
+        p.fillPath(rounded(track, self.H / 2), mix(t["track"], GREEN, k))
         d = self.H - 4
-        knob = QRectF(track.left() + 2 + (self.W - self.H) * min(1.0, max(0.0, k)), track.top() + 2, d, d)
-        p.setBrush(QColor(0, 0, 0, 40))
-        p.drawEllipse(knob.translated(0, 1.2))
-        p.setBrush(QColor("#FFFFFF"))
-        p.drawEllipse(knob)
+        kw, kh = d * (1 + .55 * lift), d * (1 + .14 * lift)
+        travel = track.width() - 4 - d
+        cx = track.left() + 2 + d / 2 + travel * min(1.2, max(-.2, k))
+        _glass_knob(p, QRectF(cx - kw / 2, track.center().y() - kh / 2, kw, kh), lift, reach=4)
 
 
 class GlassSlider(QSlider):
@@ -750,8 +1140,8 @@ class GlassSlider(QSlider):
 
     def __init__(self, parent=None):
         super().__init__(Qt.Orientation.Horizontal, parent)
-        self._press = Tween(self, 160)
-        self.setFixedHeight(30)
+        self._lift = Spring(self)
+        self.setFixedHeight(40)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def _frac(self) -> float:
@@ -759,14 +1149,14 @@ class GlassSlider(QSlider):
         return (self.value() - self.minimum()) / span if span else 0.0
 
     def _value_at(self, x: float) -> int:
-        k = (x - self.K / 2) / max(1.0, self.width() - self.K)
+        k = (x - self.K) / max(1.0, self.width() - self.K * 2)
         return round(self.minimum() + max(0.0, min(1.0, k)) * (self.maximum() - self.minimum()))
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
             self.setSliderDown(True)
             self.setValue(self._value_at(e.position().x()))
-            self._press.to(1, 140)
+            self._lift.to(1, LIFT_ON)
 
     def mouseMoveEvent(self, e):
         if self.isSliderDown():
@@ -774,24 +1164,22 @@ class GlassSlider(QSlider):
 
     def mouseReleaseEvent(self, e):
         self.setSliderDown(False)
-        self._press.to(0, 320, SPRING)
+        self._lift.to(0, LIFT_OFF)
 
     def paintEvent(self, e):
         t = T(self)
         p = painter(self)
         cy = self.height() / 2
-        x = self.K / 2 + (self.width() - self.K) * self._frac()
+        left, width = self.K, self.width() - self.K * 2
+        x = left + width * self._frac()
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(t["track"])
-        p.drawRoundedRect(QRectF(self.K / 2, cy - 2, self.width() - self.K, 4), 2, 2)
+        p.drawRoundedRect(QRectF(left, cy - 2.5, width, 5), 2.5, 2.5)
         p.setBrush(ACCENT)
-        p.drawRoundedRect(QRectF(self.K / 2, cy - 2, x - self.K / 2, 4), 2, 2)
-        r = self.K / 2 * (1 + .12 * self._press.value)
-        p.setBrush(QColor(0, 0, 0, 35))
-        p.drawEllipse(QPointF(x, cy + 1.2), r + .5, r + .5)
-        p.setBrush(QColor("#FFFFFF"))
-        p.setPen(QPen(QColor(0, 0, 0, 25), .8))
-        p.drawEllipse(QPointF(x, cy), r, r)
+        p.drawRoundedRect(QRectF(left, cy - 2.5, x - left, 5), 2.5, 2.5)
+        lift = max(0.0, self._lift.value)
+        kw, kh = self.K * (1 + .7 * lift), self.K * (1 + .2 * lift)
+        _glass_knob(p, QRectF(x - kw / 2, cy - kh / 2, kw, kh), lift, reach=5)
 
 
 class GlassProgress(QWidget):
@@ -955,7 +1343,9 @@ class FileDelegate(QStyledItemDelegate):
 
 
 class FileList(QListWidget):
-    """Список файлов с заглушкой, когда он пуст."""
+    """Список файлов. Пока он пуст — это зона для файлов: сюда можно перетащить файлы
+    или нажать, чтобы выбрать их в Finder."""
+    browseRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -963,6 +1353,40 @@ class FileList(QListWidget):
         self.setMouseTracking(True)
         self.setUniformItemSizes(True)
         self.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        # Список рисует себя во viewport — анимации должны перерисовывать именно его
+        self._hover = Tween(self.viewport(), 180)
+        self._press = Tween(self.viewport(), 110)
+        self._pressed_in_zone = False   # флаг, а не анимация: быстрый тап короче первого кадра
+
+    def _zone(self) -> QRectF:
+        return QRectF(self.viewport().rect()).adjusted(12, 10, -12, -10)
+
+    def _over_zone(self, pos) -> bool:
+        return not self.count() and self._zone().contains(QPointF(pos))
+
+    def mouseMoveEvent(self, e):
+        over = self._over_zone(e.position())
+        self._hover.to(1 if over else 0)
+        self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if over else Qt.CursorShape.ArrowCursor)
+        super().mouseMoveEvent(e)
+
+    def leaveEvent(self, e):
+        self._hover.to(0, 260)
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e):
+        self._pressed_in_zone = e.button() == Qt.MouseButton.LeftButton and self._over_zone(e.position())
+        if self._pressed_in_zone:
+            self._press.to(1, 90)
+        super().mousePressEvent(e)
+
+    def mouseReleaseEvent(self, e):
+        clicked = self._pressed_in_zone and self._over_zone(e.position())
+        self._pressed_in_zone = False
+        self._press.to(0, 380, SPRING)
+        super().mouseReleaseEvent(e)
+        if clicked:
+            self.browseRequested.emit()
 
     def paintEvent(self, e):
         super().paintEvent(e)
@@ -970,23 +1394,33 @@ class FileList(QListWidget):
             return
         t = T(self)
         p = painter(self.viewport())
-        c = QRectF(self.viewport().rect()).center()
-        circle = QRectF(c.x() - 34, c.y() - 78, 68, 68)
+        h = self._hover.value
+        zone = self._zone()
+        # Пунктирная рамка зоны: при наведении — синяя с лёгкой заливкой
+        p.fillPath(rounded(zone, 14), alpha(ACCENT, .06 * h))
+        pen = QPen(mix(t["separator"], ACCENT, h), 1.5, Qt.PenStyle.CustomDashLine)
+        pen.setDashPattern([4, 4])
+        p.setPen(pen)
+        p.drawPath(rounded(zone.adjusted(.75, .75, -.75, -.75), 13.25))
+
+        c = zone.center()
+        s = 1 + .06 * h - .06 * self._press.value       # кружок чуть растёт при наведении и «вдавливается»
+        circle = QRectF(c.x() - 34 * s, c.y() - 44 - 34 * s, 68 * s, 68 * s)
         g = QLinearGradient(circle.topLeft(), circle.bottomLeft())
         g.setColorAt(0, QColor(_AVATAR["blue"][0]))
         g.setColorAt(1, QColor(_AVATAR["blue"][1]))
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(g)
         p.drawEllipse(circle)
-        draw_icon(p, "doc", circle.adjusted(18, 18, -18, -18), QColor("#FFFFFF"), 2.0)
-        w = self.viewport().width()
+        draw_icon(p, "plus", circle.adjusted(19 * s, 19 * s, -19 * s, -19 * s), QColor("#FFFFFF"), 2.4)
         p.setPen(t["text"])
         p.setFont(font(17, QFont.Weight.DemiBold))
-        p.drawText(QRectF(0, c.y() + 2, w, 24), Qt.AlignmentFlag.AlignCenter, "Нет файлов")
-        p.setPen(t["secondary"])
+        p.drawText(QRectF(zone.left(), c.y() + 2, zone.width(), 24), Qt.AlignmentFlag.AlignCenter,
+                   "Перетащите файлы сюда")
+        p.setPen(mix(t["secondary"], ACCENT, h))
         p.setFont(font(13))
-        p.drawText(QRectF(0, c.y() + 28, w, 20), Qt.AlignmentFlag.AlignCenter,
-                   "Перетащите файлы в окно или нажмите «+» вверху")
+        p.drawText(QRectF(zone.left(), c.y() + 28, zone.width(), 20), Qt.AlignmentFlag.AlignCenter,
+                   "или нажмите, чтобы выбрать")
 
 
 # --------------------------------------------------------------------------- #
@@ -1032,7 +1466,7 @@ class Toast(QWidget):
         p.translate(0, (1 - k) * 14)
         r = QRectF(self.rect()).adjusted(4, 3, -4, -7)
         p.drawPixmap(r.topLeft() - QPointF(_SHADOW_PAD, _SHADOW_PAD),
-                     _shadow_pixmap(r.size(), 14, QColor(0, 0, 0, 70), p.device().devicePixelRatioF()))
+                     _shadow_pixmap(r.size(), 14, QColor(0, 0, 0, 70), p.device().devicePixelRatioF(), reach=4))
         dark = QApplication.palette().color(QPalette.ColorRole.Window).lightness() < 128
         # В тёмной теме плашка светлее карточек, иначе сливается с ними
         p.fillPath(rounded(r, 14), QColor(64, 64, 68, 245) if dark else QColor(30, 30, 32, 236))
@@ -1053,8 +1487,14 @@ class Toast(QWidget):
 #  Всплывающее меню (выпадающие списки, контекстное меню)
 # --------------------------------------------------------------------------- #
 
+SCROLL = (1.0, 260.0, 32.0)      # пружина прокрутки: почти критическое затухание, без перелёта
+SCROLL_BACK = (1.0, 200.0, 24.0)  # возврат после оттяга за край — с лёгким пружинением
+
+
 class GlassPopup(QWidget):
-    """Стеклянное меню со скруглёнными углами вместо квадратного системного."""
+    """Стеклянное меню со скруглёнными углами вместо квадратного системного.
+    Прокрутка как в iOS: трекпад — попиксельно с системной инерцией, колёсико — плавно на пружине,
+    за краями — резиновый оттяг; подсветка пункта плавно переезжает между строками."""
     triggered = Signal(int)
     ROW = 32
     PAD = 6
@@ -1070,10 +1510,19 @@ class GlassPopup(QWidget):
         self._items = items
         self._current = current
         self._hover = max(current, 0)
-        self._scroll = 0
+        self._scroll = Spring(self, 0.0, SCROLL)     # смещение списка в пикселях
+        self._hl = Spring(self, float(self._hover), LIFT_ON)   # где сейчас подсветка (в строках)
+        self._bar_alpha = Tween(self, 180)           # полоса прокрутки видна только во время прокрутки
+        self._bar_timer = QTimer(self)
+        self._bar_timer.setSingleShot(True)
+        self._bar_timer.timeout.connect(lambda: self._bar_alpha.to(0, 400))
+        self._settle_timer = QTimer(self)            # после жеста возвращаем оттянутый край на место
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.timeout.connect(self._settle)
         self._moved = False
         self._opened_at = 0.0
-        self._shown = Tween(self, 200)
+        self._shown = Spring(self)
+        self._backdrop = None
         self._rows = min(len(items), self.MAX_ROWS)
         fm = QFontMetrics(font(14, QFont.Weight.Medium))
         self._body_w = max(fm.horizontalAdvance(t) for t in items) + 64
@@ -1099,15 +1548,74 @@ class GlassPopup(QWidget):
             pos.setY(pos.y() - h - flip_by)
         pos.setX(max(screen.left(), min(pos.x(), screen.right() - self.width())))
         self.move(pos)
-        self._scroll = max(0, min(self._current - self._rows // 2, len(self._items) - self._rows))
+        self._backdrop = self._grab_window_below(pos)
+        self._scroll.jump(self._clamp((self._current - self._rows // 2) * self.ROW))
         self._opened_at = time.monotonic()
         self.show()
         self.setFocus()
-        self._shown.to(1, 260, SPRING)
+        self._shown.to(1, LIFT_OFF)
+
+    def _grab_window_below(self, pos: QPoint):
+        """Меню — отдельное окно, поэтому то, что под ним, снимаем с главного окна заранее."""
+        win = self.parentWidget().window() if self.parentWidget() else None
+        if win is None:
+            return None
+        margin = int(REFRACT_SHIFT + 4)
+        body = self._body().toAlignedRect()
+        want = QRect(win.mapFromGlobal(pos + body.topLeft()) - QPoint(margin, margin),
+                     body.size() + QSize(margin * 2, margin * 2))
+        region = want.intersected(win.rect())
+        if region.isEmpty():
+            return None
+        # Сильнее размываем, чем у панели вкладок: на меню должен читаться текст
+        return frost(win.grab(region), 16), QPointF(body.topLeft() - QPoint(margin, margin)
+                                                    + (region.topLeft() - want.topLeft()))
+
+    # --- прокрутка
+    def _max_scroll(self) -> float:
+        return max(0.0, (len(self._items) - self._rows) * self.ROW)
+
+    def _clamp(self, v: float) -> float:
+        return max(0.0, min(self._max_scroll(), v))
+
+    def _settle(self):
+        """Вернуть список в границы, если его оттянули за край."""
+        v = self._scroll.value
+        if v != self._clamp(v):
+            self._scroll.to(self._clamp(v), SCROLL_BACK)
+
+    def _show_bar(self):
+        if self._max_scroll() > 0:
+            self._bar_alpha.to(1, 120)
+            self._bar_timer.start(700)
+
+    def wheelEvent(self, e):
+        pd, ad = e.pixelDelta(), e.angleDelta()
+        if not pd.isNull():
+            # Трекпад: едем за пальцами попиксельно, инерцию присылает сама macOS.
+            # За краем — сопротивление, как резинка в iOS
+            v = self._scroll.value - pd.y()
+            if v != self._clamp(v):
+                v = self._scroll.value - pd.y() * .3
+            self._scroll.jump(v)
+            self._settle_timer.start(90)
+        elif ad.y():
+            # Колёсико мыши: плавно доезжаем до цели на пружине
+            target = self._clamp(self._scroll.target - ad.y() / 120 * self.ROW * 1.5)
+            self._scroll.to(target, SCROLL)
+        self._show_bar()
+        self._hover_from_cursor()
+        e.accept()
+
+    def _hover_from_cursor(self):
+        i = self._row_at(self.mapFromGlobal(QCursor.pos()).y())
+        if i >= 0 and i != self._hover:
+            self._hover = i
+            self._hl.to(i, LIFT_ON)
 
     # --- ввод
     def _row_at(self, y: float) -> int:
-        i = int((y - self.MARGIN - self.PAD) // self.ROW) + self._scroll
+        i = int((y - self.MARGIN - self.PAD + self._scroll.value) // self.ROW)
         return i if 0 <= i < len(self._items) and self._body().contains(QPointF(self.MARGIN + 1, y)) else -1
 
     def mouseMoveEvent(self, e):
@@ -1115,7 +1623,7 @@ class GlassPopup(QWidget):
         i = self._row_at(e.position().y())
         if i >= 0 and i != self._hover:
             self._hover = i
-            self.update()
+            self._hl.to(i, LIFT_ON)
 
     def mouseReleaseEvent(self, e):
         # Отпускание той же кнопки, что открыла меню, — не выбор
@@ -1125,17 +1633,22 @@ class GlassPopup(QWidget):
         if i >= 0:
             self._pick(i)
 
-    def wheelEvent(self, e):
-        step = -1 if e.angleDelta().y() > 0 else 1
-        self._scroll = max(0, min(self._scroll + step, len(self._items) - self._rows))
-        self.update()
-
     def keyPressEvent(self, e):
         key = e.key()
         if key in (Qt.Key.Key_Down, Qt.Key.Key_Up):
             self._hover = max(0, min(len(self._items) - 1, self._hover + (1 if key == Qt.Key.Key_Down else -1)))
-            self._scroll = max(min(self._scroll, self._hover), self._hover - self._rows + 1)
-            self.update()
+            self._hl.to(self._hover, LIFT_ON)
+            # Плавно докручиваем, чтобы выбранная строка была видна
+            top = self._hover * self.ROW
+            view = self._rows * self.ROW
+            target = self._scroll.target
+            if top < target:
+                target = top
+            elif top + self.ROW > target + view:
+                target = top + self.ROW - view
+            if target != self._scroll.target:
+                self._scroll.to(self._clamp(target), SCROLL)
+                self._show_bar()
         elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
             self._pick(self._hover)
         elif key == Qt.Key.Key_Escape:
@@ -1150,32 +1663,43 @@ class GlassPopup(QWidget):
         t = T(self)
         p = painter(self)
         k = self._shown.value
-        p.setOpacity(max(0.0, min(1.0, k * 1.4)))
+        p.setOpacity(max(0.0, min(1.0, k * 1.6)))
         body = self._body()
         s = .94 + .06 * k                              # раскрывается от верхнего края
         p.translate(body.center().x(), body.top())
         p.scale(s, s)
         p.translate(-body.center().x(), -body.top())
-        shape = paint_glass(p, body, 14, t, alpha(t["popup"], .97), alpha(t["popup"], .93),
-                            shadow=QColor(0, 0, 0, 60))
+        dark = is_dark()
+        shape = paint_liquid_glass(p, body, 18, backdrop=self._backdrop,
+                                   fill=QColor(36, 36, 38, 205) if dark else QColor(255, 255, 255, 190),
+                                   shadow=QColor(0, 0, 0, 120 if dark else 45))
         p.setClipPath(shape)
-        for row in range(self._rows):
-            i = row + self._scroll
-            r = QRectF(body.left() + self.PAD, body.top() + self.PAD + row * self.ROW,
-                       body.width() - self.PAD * 2, self.ROW)
-            hovered = i == self._hover
-            if hovered:
-                p.fillPath(rounded(r, 8), ACCENT)
-            fg = QColor("#FFFFFF") if hovered else t["text"]
-            if i == self._current:
-                draw_icon(p, "check", QRectF(r.left() + 6, r.center().y() - 8, 16, 16), fg, 2.2)
+        scroll = self._scroll.value
+        top = body.top() + self.PAD - scroll            # где была бы первая строка
+        x, w = body.left() + self.PAD, body.width() - self.PAD * 2
+        # Подсветка едет между строками сама по себе, текст под ней — белый, вне её — обычный
+        hl = rounded(QRectF(x, top + self._hl.value * self.ROW, w, self.ROW), 8)
+        p.fillPath(hl, ACCENT)
+        first = max(0, int(scroll // self.ROW) - 1)
+        last = min(len(self._items), first + self._rows + 3)
+        p.setFont(font(14, QFont.Weight.Medium))
+        for selected_layer in (False, True):
+            p.save()
+            p.setClipPath(hl if selected_layer else shape.subtracted(hl))
+            fg = QColor("#FFFFFF") if selected_layer else t["text"]
             p.setPen(fg)
-            p.setFont(font(14, QFont.Weight.Medium))
-            p.drawText(r.adjusted(30, 0, -10, 0), AlignLeftV, self._items[i])
-        if len(self._items) > self._rows:              # тонкий индикатор прокрутки
+            for i in range(first, last):
+                r = QRectF(x, top + i * self.ROW, w, self.ROW)
+                if i == self._current:
+                    draw_icon(p, "check", QRectF(r.left() + 6, r.center().y() - 8, 16, 16), fg, 2.2)
+                p.drawText(r.adjusted(30, 0, -10, 0), AlignLeftV, self._items[i])
+            p.restore()
+        a = self._bar_alpha.value
+        if self._max_scroll() > 0 and a > 0:             # тонкая полоса прокрутки, как в iOS
             track_h = body.height() - self.PAD * 4
             bar_h = max(24.0, track_h * self._rows / len(self._items))
-            y = body.top() + self.PAD * 2 + (track_h - bar_h) * self._scroll / (len(self._items) - self._rows)
+            k = max(0.0, min(1.0, scroll / self._max_scroll()))
+            y = body.top() + self.PAD * 2 + (track_h - bar_h) * k
             p.setPen(Qt.PenStyle.NoPen)
-            p.setBrush(t["track"])
+            p.setBrush(alpha(t["secondary"], .55 * a))
             p.drawRoundedRect(QRectF(body.right() - 6, y, 3, bar_h), 1.5, 1.5)
