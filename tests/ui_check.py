@@ -197,7 +197,9 @@ def main() -> int:
     w.settings.settings['auto_open_folder'] = False
     app.setPalette(get_palette_for("light"))
     app.setStyleSheet(get_stylesheet_for("light"))
-    w.move(60, 60)
+    avail = screen.availableGeometry()
+    print(f"Экран {screen.geometry().width()}×{screen.geometry().height()}, окно {w.width()}×{w.height()}", flush=True)
+    w.move(avail.left() + 20, avail.top() + 20)
     w.show()
     w.raise_()
     w.activateWindow()

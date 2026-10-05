@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QLabel,
     QFileDialog, QTextEdit, QApplication, QScrollArea,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot, QPropertyAnimation, QEasingCurve, QPoint, QSize
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFontDatabase, QShortcut, QKeySequence, QPalette
 
 from src.converters.factory import ConverterFactory
@@ -241,8 +241,13 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Настраивает интерфейс"""
         self.setWindowTitle("File Converter Pro")
-        self.resize(980, 780)
         self.setMinimumSize(760, 620)
+        # На ноутбуке 1366×768 окно 980×780 уходило за нижний край вместе с панелью вкладок —
+        # подгоняем под свободную область экрана и ставим по центру
+        screen = QApplication.primaryScreen().availableGeometry()
+        size = QSize(min(980, screen.width() - 40), min(780, screen.height() - 40)).expandedTo(self.minimumSize())
+        self.resize(size)
+        self.move(screen.center() - QPoint(size.width() // 2, size.height() // 2))
         mac = sys.platform == 'darwin'
 
         central = QWidget()

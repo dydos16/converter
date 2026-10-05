@@ -13,6 +13,12 @@ else:
 
 sys.path.insert(0, str(BASE))
 
+# Консоль Windows по умолчанию в cp1252: на кириллице print() падал, и собранное приложение
+# не запускалось из командной строки. В оконной сборке потоков нет совсем (None) — их не трогаем
+for _stream in (sys.stdout, sys.stderr):
+    if _stream is not None and hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 
 def main():
     print("=" * 60)
