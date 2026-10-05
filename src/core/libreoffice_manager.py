@@ -287,7 +287,7 @@ class LibreOfficeManager(QObject):
             except subprocess.TimeoutExpired:
                 logger.warning("Проверка LibreOffice таймаут (>10s)")
                 self._is_available = False
-                self.status_changed.emit("Проверка LibreOffice: timeout", False)
+                self.status_changed.emit("LibreOffice не отвечает (таймаут проверки)", False)
             except Exception as e:
                 logger.error(f"Ошибка при проверке LibreOffice: {e}")
                 self._is_available = False

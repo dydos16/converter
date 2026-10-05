@@ -2,29 +2,38 @@
 Главное окно приложения для PySide6
 """
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QLabel,
-    QFileDialog, QTextEdit, QApplication, QScrollArea, QSizePolicy,
+    QFileDialog, QTextEdit, QApplication, QScrollArea,
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot, QRectF, QPropertyAnimation, QEasingCurve
-from PySide6.QtGui import (
-    QDragEnterEvent, QDropEvent, QPainter, QPalette, QPixmap, QFontDatabase,
-)
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFontDatabase, QShortcut, QKeySequence
 
 from src.converters.factory import ConverterFactory
 from src.core.job_manager import JobManager, ConversionJob, JobStatus
 from src.core.libreoffice_manager import LibreOfficeManager
 from src.core.settings import Settings
-from src.gui.styles import get_stylesheet_for, get_palette_for, paint_backdrop, RED
+from src.gui.styles import get_stylesheet_for, get_palette_for, RED
 from src.gui.glass import (
-    GlassGroup, GlassButton, GlassCombo, GlassSpin, GlassSlider, Toggle, GlassProgress,
-    Segmented, FadeStack, FileList, Toast, GlassPopup, PROGRESS_ROLE, META_ROLE,
+    PrimaryButton, IconButton, GlassCombo, GlassSpin, GlassSlider, Toggle, GlassProgress,
+    TabBar, FadeStack, FileList, Toast, GlassPopup, InsetSection, Row, SliderRow, PageHeader,
+    PROGRESS_ROLE, META_ROLE,
 )
 from src.utils.helpers import get_file_size_str, get_unique_filename, ensure_output_directory
 from loguru import logger
+
+
+def files_word(n: int) -> str:
+    """3 файла, 5 файлов, 21 файл"""
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} файл"
+    if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
+        return f"{n} файла"
+    return f"{n} файлов"
 
 
 class ConversionWorker(QThread):
@@ -117,10 +126,19 @@ class MainWindow(QMainWindow):
         """Принудительное обновление статуса"""
         self.update_status()
 
+    @staticmethod
+    def _short_lo_status(message: str, available: bool) -> str:
+        """«LibreOffice готов: LibreOffice 26.2.2.2 1f77…» → «Готов · 26.2.2.2» — чтобы влезло в строку настроек."""
+        if available:
+            version = re.search(r"\d+(?:\.\d+)+", message)
+            return f"Готов · {version.group(0)}" if version else "Готов"
+        text = re.sub(r"\s*LibreOffice\b:?", "", message).strip()
+        return text[:1].upper() + text[1:]
+
     @Slot(str, bool)
     def _on_libreoffice_status_changed(self, message: str, is_available: bool):
-        """Обновляет индикатор статуса LibreOffice в статус-баре"""
-        self.libreoffice_status_label.setText(message)
+        """Обновляет состояние LibreOffice в настройках"""
+        self.libreoffice_status_label.setText(self._short_lo_status(message, is_available))
         if is_available:
             self.libreoffice_status_label.setStyleSheet("color: #34C759;")
             self.status_progress_bar.hide()
@@ -130,7 +148,7 @@ class MainWindow(QMainWindow):
     @Slot(int, str)
     def _on_libreoffice_install_progress(self, percent: int, message: str):
         """Обновляет прогресс автоматической установки LibreOffice."""
-        self.libreoffice_status_label.setText(message[:40])
+        self.libreoffice_status_label.setText(self._short_lo_status(message, False))
         self.status_progress_bar.setValue(percent)
         self.status_progress_bar.show()
 
@@ -139,12 +157,12 @@ class MainWindow(QMainWindow):
         """Обрабатывает завершение установки LibreOffice."""
         if success:
             self.status_progress_bar.hide()
-            self.libreoffice_status_label.setText("LibreOffice готов")
+            self.libreoffice_status_label.setText("Готов")
             self.libreoffice_status_label.setStyleSheet("color: #34C759;")
         else:
             self.status_progress_bar.setValue(0)
             self.status_progress_bar.hide()
-            self.libreoffice_status_label.setText("LibreOffice недоступен")
+            self.libreoffice_status_label.setText("Недоступен")
             self.libreoffice_status_label.setStyleSheet("color: #FF3B30;")
 
     @Slot(str)
@@ -153,7 +171,7 @@ class MainWindow(QMainWindow):
         from src.core.libreoffice_manager import LINUX_DEPS_COMMAND
         self._append_log(f"LibreOffice не запускается: в системе нет библиотек {libs}.\n"
                          f"Установите их командой:\n{LINUX_DEPS_COMMAND}")
-        self.toast.show_message("LibreOffice не хватает системных библиотек — команда установки во вкладке «Лог»",
+        self.toast.show_message("LibreOffice не хватает системных библиотек — команда установки в «Журнале»",
                                 "error", 10000)
 
     def maybe_start_libreoffice_install(self):
@@ -186,19 +204,28 @@ class MainWindow(QMainWindow):
         """Обработчик смены темы в настройках — применяет сразу."""
         self.apply_theme(mode)
 
-    def paintEvent(self, event):
-        dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
-        dpr = self.devicePixelRatioF()
-        key = (self.size(), dark, dpr)
-        if getattr(self, "_backdrop_key", None) != key:
-            pm = QPixmap(self.size() * dpr)
-            pm.setDevicePixelRatio(dpr)
-            paint_backdrop(QPainter(pm), QRectF(self.rect()), dark)
-            self._backdrop, self._backdrop_key = pm, key
-        QPainter(self).drawPixmap(0, 0, self._backdrop)
+    # Шапка окна на маке прозрачная и стала частью интерфейса — повторяем её поведение сами
+    TITLE_STRIP = 38
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() < self.TITLE_STRIP:
+            self.windowHandle().startSystemMove()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.position().y() < self.TITLE_STRIP:
+            self.showNormal() if self.isMaximized() else self.showMaximized()
+        super().mouseDoubleClickEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        self._place_overlays()
+
+    def _place_overlays(self):
+        """Панель вкладок и уведомления плавают поверх страниц у нижнего края."""
+        c = self.centralWidget()
+        self.tabs.move((c.width() - self.tabs.width()) // 2, c.height() - self.tabs.height() - 4)
+        self.tabs.raise_()
         self.toast.reposition()
 
     def showEvent(self, event):
@@ -206,6 +233,7 @@ class MainWindow(QMainWindow):
         if getattr(self, "_shown_once", False):
             return
         self._shown_once = True
+        self._place_overlays()
         self.setWindowOpacity(0.0)
         self._fade_in = QPropertyAnimation(self, b"windowOpacity", self)
         self._fade_in.setDuration(260)
@@ -216,432 +244,236 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Настраивает интерфейс"""
         self.setWindowTitle("File Converter Pro")
-        self.resize(1080, 760)
-        self.setMinimumSize(820, 600)
+        self.resize(980, 780)
+        self.setMinimumSize(760, 620)
+        mac = sys.platform == 'darwin'
+        if mac:
+            # Контент уходит под прозрачную шапку окна, «светофор» лежит поверх — как у нативных приложений
+            self.setWindowFlag(Qt.WindowType.ExpandedClientAreaHint, True)
+            self.setWindowFlag(Qt.WindowType.NoTitleBarBackgroundHint, True)
 
-        # Центральный виджет
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, self.TITLE_STRIP if mac else 14, 0, 0)
 
-        # Основной layout
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(28, 22, 28, 6)
-        main_layout.setSpacing(4)
-
-        title = QLabel("File Converter Pro")
-        title.setProperty("title", True)
-        subtitle = QLabel("Документы, PDF и изображения. Перетащите файлы прямо в окно.")
-        subtitle.setProperty("subtitle", True)
-        main_layout.addWidget(title)
-        main_layout.addWidget(subtitle)
-        main_layout.addSpacing(10)
-
-        # Вкладки: сегментированный переключатель + страницы с плавной сменой
-        self.tabs = Segmented(["Конвертация", "Настройки", "Лог"])
-        main_layout.addWidget(self.tabs, 0, Qt.AlignmentFlag.AlignHCenter)
-        main_layout.addSpacing(8)
         self.pages = FadeStack()
-        main_layout.addWidget(self.pages, 1)
-        self.tabs.currentChanged.connect(self.pages.setCurrentIndex)
-
+        main_layout.addWidget(self.pages)
         for setup in (self.setup_conversion_tab, self.setup_settings_tab, self.setup_log_tab):
             page = QWidget()
             setup(page)
             self.pages.addWidget(page)
 
-        # Единые отступы внутри всех карточек
-        for group in self.findChildren(GlassGroup):
-            if group.layout():
-                group.layout().setContentsMargins(16, 12, 16, 14)
+        self.tabs = TabBar([("Конвертер", "arrows"), ("Настройки", "gear"), ("Журнал", "list")], central)
+        self.tabs.currentChanged.connect(self.pages.setCurrentIndex)
+        self.toast = Toast(central)
 
-        self.toast = Toast(self)
-
-        # Статус бар
-        self.status_label = QLabel("Готов к работе")
-        self.statusBar().addWidget(self.status_label)
-
-        self.libreoffice_status_label = QLabel("LibreOffice: проверка...")
-        self.libreoffice_status_label.setMinimumWidth(180)
-        self.libreoffice_status_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-        self.statusBar().addPermanentWidget(self.libreoffice_status_label)
-
-        # Прогресс автоматической установки LibreOffice (скрыт до начала докачки)
-        self.status_progress_bar = GlassProgress()
-        self.status_progress_bar.setFixedWidth(140)
-        self.status_progress_bar.hide()
-        self.statusBar().addPermanentWidget(self.status_progress_bar)
-
-        self.active_jobs_label = QLabel("Активных: 0")
-        self.statusBar().addPermanentWidget(self.active_jobs_label)
+        # ⌘1–⌘3 — вкладки, ⌘O — добавить файлы (Ctrl на Windows и Linux)
+        for i in range(3):
+            QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self, activated=lambda i=i: self.tabs.setCurrentIndex(i))
+        QShortcut(QKeySequence.StandardKey.Open, self, activated=self.add_files)
 
     def setup_conversion_tab(self, parent: QWidget):
-        """Настраивает вкладку конвертации"""
+        """Страница конвертации: формат, очередь как список чатов, кнопка действия"""
         layout = QVBoxLayout(parent)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setContentsMargins(24, 0, 24, 100)
+        layout.setSpacing(18)
 
-        # ---- Верхняя панель: форматы + выбор файлов ----
-        top_panel = QHBoxLayout()
-        top_panel.setSpacing(12)
-
-        # Выбор форматов
-        format_group = GlassGroup("Формат")
-        format_layout = QHBoxLayout(format_group)
-        format_layout.setContentsMargins(14, 14, 14, 14)
-        format_layout.setSpacing(8)
+        self.add_files_btn = IconButton("plus", "Добавить файлы (⌘O)")
+        # Диалог открываем после того, как кнопка отрисовала отпускание
+        self.add_files_btn.clicked.connect(lambda: QTimer.singleShot(0, self.add_files))
+        self.add_folder_btn = IconButton("folder", "Добавить папку")
+        self.add_folder_btn.clicked.connect(lambda: QTimer.singleShot(0, self.add_folder))
+        self.clear_btn = IconButton("trash", "Очистить список")
+        self.clear_btn.clicked.connect(self.clear_files)
+        self.header = PageHeader("Конвертер", [self.clear_btn, self.add_folder_btn, self.add_files_btn])
+        self.header.setSubtitle("Готов к работе")
+        self.status_label = self.header.subtitle
+        layout.addWidget(self.header)
 
         self.input_format_combo = GlassCombo()
-        input_formats = ['Все'] + ConverterFactory.get_input_formats()
-        self.input_format_combo.addItems(input_formats)
+        self.input_format_combo.addItems(['Все'] + ConverterFactory.get_input_formats())
         self.input_format_combo.currentTextChanged.connect(self.on_input_format_changed)
-
         self.output_format_combo = GlassCombo()
         self.output_format_combo.setEnabled(False)
         self.output_format_combo.currentTextChanged.connect(self.update_convert_button)
 
-        # Комбобоксы не должны растягиваться по вертикали — фиксируем высоту
-        for combo in (self.input_format_combo, self.output_format_combo):
-            combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            combo.setFixedHeight(40)
+        formats = InsetSection("Формат")
+        formats.add(Row("Из", self.input_format_combo, "doc", "#007AFF"))
+        formats.add(Row("В", self.output_format_combo, "arrows", "#34C759"))
+        layout.addWidget(formats)
 
-        lbl_from = QLabel("Из")
-        lbl_from.setProperty("big", True)
-        format_layout.addWidget(lbl_from)
-        format_layout.addWidget(self.input_format_combo, 1)
-        lbl_to = QLabel("в")
-        lbl_to.setProperty("big", True)
-        format_layout.addWidget(lbl_to)
-        format_layout.addWidget(self.output_format_combo, 1)
-
-        top_panel.addWidget(format_group, 3)
-
-        # Кнопки управления файлами (крупные пилюли)
-        buttons_group = GlassGroup("Файлы")
-        buttons_layout = QHBoxLayout(buttons_group)
-        buttons_layout.setContentsMargins(14, 14, 14, 14)
-        buttons_layout.setSpacing(8)
-
-        # Две крупные кнопки в строку
-        row1 = QHBoxLayout()
-        row1.setSpacing(10)
-        self.add_files_btn = GlassButton("Добавить файлы")
-        # Диалог открываем после того, как кнопка отрисовала отпускание
-        self.add_files_btn.clicked.connect(lambda: QTimer.singleShot(0, self.add_files))
-        self.add_files_btn.setFixedHeight(40)
-        row1.addWidget(self.add_files_btn, 1)
-
-        self.add_folder_btn = GlassButton("Добавить папку")
-        self.add_folder_btn.clicked.connect(lambda: QTimer.singleShot(0, self.add_folder))
-        self.add_folder_btn.setFixedHeight(40)
-        row1.addWidget(self.add_folder_btn, 1)
-        buttons_layout.addLayout(row1)
-        format_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-
-        self.clear_btn = GlassButton("Очистить")
-        self.clear_btn.clicked.connect(self.clear_files)
-        self.clear_btn.setFixedHeight(40)
-        row1.addWidget(self.clear_btn)
-
-        top_panel.addWidget(buttons_group, 2)
-
-        layout.addLayout(top_panel)
-
-        # ---- Список файлов ----
-        file_group = GlassGroup("Очередь")
-        self.file_group = file_group
-        file_layout = QVBoxLayout(file_group)
-
+        self.file_group = InsetSection("Очередь")
+        self.file_group.rows.setContentsMargins(0, 4, 0, 4)
         self.file_list = FileList()
         self.file_list.setAcceptDrops(True)
         self.file_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
-        self.file_list.setMinimumHeight(220)
+        self.file_list.setMinimumHeight(200)
         self.file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.file_list.customContextMenuRequested.connect(self.show_file_context_menu)
-        file_layout.addWidget(self.file_list)
+        self.file_group.add(self.file_list, 1)
+        layout.addWidget(self.file_group, 1)
 
-        layout.addWidget(file_group, 1)
-
-        # ---- Нижняя панель: общий прогресс + большая кнопка конвертации ----
-        bottom_panel = QHBoxLayout()
-        bottom_panel.setContentsMargins(6, 14, 0, 0)
-        bottom_panel.setSpacing(24)
-
-        progress_area = QVBoxLayout()
-        progress_area.setSpacing(8)
-        progress_area.addStretch()
-        progress_label = QLabel("Прогресс")
-        progress_label.setProperty("secondary", True)
-        progress_area.addWidget(progress_label)
         self.total_progress = GlassProgress()
-        progress_area.addWidget(self.total_progress)
-        progress_area.addStretch()
-        bottom_panel.addLayout(progress_area, 2)
+        self.total_progress.hide()           # показываем только пока идёт конвертация
+        layout.addWidget(self.total_progress)
 
-        self.convert_btn = GlassButton("Конвертировать")
+        self.convert_btn = PrimaryButton("Конвертировать")
         self.convert_btn.clicked.connect(self.start_conversion)
         self.convert_btn.setEnabled(False)
-        self.convert_btn.setFixedSize(230, 56)
-        self.convert_btn.setProperty("primary", True)
-        bottom_panel.addWidget(self.convert_btn)
-
-        layout.addLayout(bottom_panel)
+        self.convert_btn.setFixedSize(320, 52)
+        layout.addWidget(self.convert_btn, 0, Qt.AlignmentFlag.AlignHCenter)
 
         # Включаем Drag & Drop
         self.setAcceptDrops(True)
 
     def setup_settings_tab(self, parent: QWidget):
-        """Настраивает вкладку настроек"""
-        # Создаем скролл область
+        """Страница настроек: сгруппированные списки, всё сохраняется сразу"""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(24, 0, 24, 100)
+        layout.setSpacing(22)
+        layout.addWidget(PageHeader("Настройки"))
 
-        # Контейнер для содержимого
-        content_widget = QWidget()
-        layout = QVBoxLayout(content_widget)
-        layout.setContentsMargins(0, 0, 10, 10)
-        layout.setSpacing(6)
-
-        # Внешний вид (тема)
-        appear_group = GlassGroup("Внешний вид")
-        appear_layout = QVBoxLayout(appear_group)
-
-        theme_layout = QHBoxLayout()
-        theme_layout.addWidget(QLabel("Тема:", self))
+        # Оформление
         self.theme_combo = GlassCombo()
-        for label, val in [
-            ("Системная", "system"),
-            ("Светлая", "light"),
-            ("Тёмная", "dark"),
-        ]:
+        for label, val in [("Системная", "system"), ("Светлая", "light"), ("Тёмная", "dark")]:
             self.theme_combo.addItem(label, val)
-        current_theme = self.settings.get('theme', 'system')
-        self.theme_combo.setCurrentIndex(
-            {"system": 0, "light": 1, "dark": 2}.get(current_theme, 0)
-        )
-        self.theme_combo.currentIndexChanged.connect(
-            lambda idx: self.on_theme_changed(self.theme_combo.itemData(idx))
-        )
-        theme_layout.addWidget(self.theme_combo)
-        theme_layout.addStretch()
-        appear_layout.addLayout(theme_layout)
+        self.theme_combo.setCurrentIndex({"system": 0, "light": 1, "dark": 2}.get(self.settings.get('theme', 'system'), 0))
+        self.theme_combo.currentIndexChanged.connect(lambda idx: self.on_theme_changed(self.theme_combo.itemData(idx)))
+        appear = InsetSection("Оформление", "«Системная» следует за светлой или тёмной темой ОС.")
+        appear.add(Row("Тема", self.theme_combo, "moon", "#5856D6"))
+        layout.addWidget(appear)
 
-        theme_hint = QLabel("Системная тема следует за настройками ОС", self)
-        theme_hint.setProperty("secondary", True)
-        appear_layout.addWidget(theme_hint)
-
-        layout.addWidget(appear_group)
-
-        # Настройки изображений
-        image_group = GlassGroup("Настройки изображений")
-        image_layout = QVBoxLayout(image_group)
-
-        # Качество
-        quality_layout = QHBoxLayout()
-        quality_layout.addWidget(QLabel("Качество JPEG/WebP:"))
+        # Изображения
         self.quality_slider = GlassSlider()
         self.quality_slider.setRange(1, 100)
-        quality_value = self.settings.get('image_quality', 85)
-        if quality_value is None:
-            quality_value = 85
-        self.quality_slider.setValue(int(quality_value))
-        self.quality_label = QLabel(f"{self.quality_slider.value()}%")
-        self.quality_slider.valueChanged.connect(
-            lambda v: self.quality_label.setText(f"{v}%")
-        )
-        quality_layout.addWidget(self.quality_slider)
-        quality_layout.addWidget(self.quality_label)
-        image_layout.addLayout(quality_layout)
-
-        # Максимальный размер
-        size_layout = QHBoxLayout()
-        size_layout.addWidget(QLabel("Макс. ширина:"))
+        self.quality_slider.setValue(int(self.settings.get('image_quality') or 85))
         self.max_width_spin = GlassSpin()
         self.max_width_spin.setRange(0, 10000)
         self.max_width_spin.setSpecialValueText("Без ограничений")
-        width_value = self.settings.get('image_max_width', 0)
-        if width_value is None:
-            width_value = 0
-        self.max_width_spin.setValue(int(width_value))
-
-        size_layout.addWidget(self.max_width_spin)
-        size_layout.addWidget(QLabel("Макс. высота:"))
+        self.max_width_spin.setValue(int(self.settings.get('image_max_width') or 0))
         self.max_height_spin = GlassSpin()
         self.max_height_spin.setRange(0, 10000)
         self.max_height_spin.setSpecialValueText("Без ограничений")
-        height_value = self.settings.get('image_max_height', 0)
-        if height_value is None:
-            height_value = 0
-        self.max_height_spin.setValue(int(height_value))
-        size_layout.addWidget(self.max_height_spin)
-        size_layout.addStretch()
+        self.max_height_spin.setValue(int(self.settings.get('image_max_height') or 0))
+        images = InsetSection("Изображения", "Качество применяется при сохранении в JPG и WebP.")
+        images.add(SliderRow("Качество JPEG и WebP", self.quality_slider))
+        images.add(Row("Максимальная ширина", self.max_width_spin))
+        images.add(Row("Максимальная высота", self.max_height_spin))
+        layout.addWidget(images)
 
-        image_layout.addLayout(size_layout)
-        layout.addWidget(image_group)
-
-        # Настройки PDF
-        pdf_group = GlassGroup("Настройки PDF")
-        pdf_layout = QVBoxLayout(pdf_group)
-
-        # DPI для PDF
-        dpi_layout = QHBoxLayout()
-        dpi_layout.addWidget(QLabel("DPI (качество PDF → изображения):"))
+        # PDF
         self.pdf_dpi_spin = GlassSpin()
         self.pdf_dpi_spin.setRange(72, 600)
-        self.pdf_dpi_spin.setValue(self.settings.get('pdf_dpi', 200))
         self.pdf_dpi_spin.setSuffix(" DPI")
-        dpi_layout.addWidget(self.pdf_dpi_spin)
-        dpi_layout.addStretch()
-        pdf_layout.addLayout(dpi_layout)
-
-        # Качество для PDF в изображения
-        pdf_quality_layout = QHBoxLayout()
-        pdf_quality_layout.addWidget(QLabel("Качество изображений:"))
+        self.pdf_dpi_spin.setValue(self.settings.get('pdf_dpi', 200))
         self.pdf_quality_slider = GlassSlider()
         self.pdf_quality_slider.setRange(1, 100)
         self.pdf_quality_slider.setValue(self.settings.get('pdf_quality', 85))
-        self.pdf_quality_label = QLabel(f"{self.pdf_quality_slider.value()}%")
-        self.pdf_quality_slider.valueChanged.connect(
-            lambda v: self.pdf_quality_label.setText(f"{v}%")
-        )
-        pdf_quality_layout.addWidget(self.pdf_quality_slider)
-        pdf_quality_layout.addWidget(self.pdf_quality_label)
-        pdf_layout.addLayout(pdf_quality_layout)
-
-        # Сжатие PDF
-        compress_layout = QHBoxLayout()
-        compress_layout.addWidget(QLabel("Уровень сжатия PDF:"))
         self.pdf_compress_spin = GlassSpin()
         self.pdf_compress_spin.setRange(0, 9)
         self.pdf_compress_spin.setValue(self.settings.get('pdf_compress_level', 6))
-        self.pdf_compress_spin.setToolTip("0 - без сжатия, 9 - максимальное сжатие")
-        compress_layout.addWidget(self.pdf_compress_spin)
-        compress_layout.addStretch()
-        pdf_layout.addLayout(compress_layout)
-
-        # Чекбоксы для PDF
-        self.pdf_remove_metadata_check = Toggle("Удалять метаданные")
+        self.pdf_compress_spin.setToolTip("0 — без сжатия, 9 — максимальное сжатие")
+        self.pdf_remove_metadata_check = Toggle()
         self.pdf_remove_metadata_check.setChecked(self.settings.get('pdf_remove_metadata', False))
-        pdf_layout.addWidget(self.pdf_remove_metadata_check)
-
-        self.pdf_optimize_images_check = Toggle("Оптимизировать изображения")
+        self.pdf_optimize_images_check = Toggle()
         self.pdf_optimize_images_check.setChecked(self.settings.get('pdf_optimize_images', True))
-        pdf_layout.addWidget(self.pdf_optimize_images_check)
-
-        # Стратегия извлечения таблиц
-        table_strategy_layout = QHBoxLayout()
-        table_strategy_layout.addWidget(QLabel("Стратегия извлечения таблиц:"))
         self.table_strategy_combo = GlassCombo()
         self.table_strategy_combo.addItems(['auto', 'lattice', 'stream'])
         self.table_strategy_combo.setCurrentText(self.settings.get('pdf_table_strategy', 'auto'))
-        self.table_strategy_combo.setToolTip(
-            "auto - автоматический выбор\n"
-            "lattice - для таблиц с сеткой\n"
-            "stream - для таблиц без сетки"
-        )
-        table_strategy_layout.addWidget(self.table_strategy_combo)
-        table_strategy_layout.addStretch()
-        pdf_layout.addLayout(table_strategy_layout)
+        pdf = InsetSection("PDF", "Таблицы: lattice — с сеткой, stream — без сетки, auto — определить самому.")
+        pdf.add(Row("Разрешение страниц", self.pdf_dpi_spin))
+        pdf.add(SliderRow("Качество изображений", self.pdf_quality_slider))
+        pdf.add(Row("Уровень сжатия", self.pdf_compress_spin))
+        pdf.add(Row("Удалять метаданные", self.pdf_remove_metadata_check))
+        pdf.add(Row("Оптимизировать изображения", self.pdf_optimize_images_check))
+        pdf.add(Row("Извлечение таблиц", self.table_strategy_combo))
+        layout.addWidget(pdf)
 
-        layout.addWidget(pdf_group)
-
-        # Настройки HEIC
-        heic_group = GlassGroup("Настройки HEIC (iPhone фото)")
-        heic_layout = QVBoxLayout(heic_group)
-
-        heic_quality_layout = QHBoxLayout()
-        heic_quality_layout.addWidget(QLabel("Качество:"))
+        # HEIC
         self.heic_quality_slider = GlassSlider()
         self.heic_quality_slider.setRange(1, 100)
         self.heic_quality_slider.setValue(self.settings.get('heic_quality', 85))
-        self.heic_quality_label = QLabel(f"{self.heic_quality_slider.value()}%")
-        self.heic_quality_slider.valueChanged.connect(
-            lambda v: self.heic_quality_label.setText(f"{v}%")
-        )
-        heic_quality_layout.addWidget(self.heic_quality_slider)
-        heic_quality_layout.addWidget(self.heic_quality_label)
-        heic_layout.addLayout(heic_quality_layout)
+        heic = InsetSection("Фото HEIC с iPhone")
+        heic.add(SliderRow("Качество", self.heic_quality_slider))
+        layout.addWidget(heic)
 
-        layout.addWidget(heic_group)
-
-        # Общие настройки
-        general_group = GlassGroup("Общие настройки")
-        general_layout = QVBoxLayout(general_group)
-
-        self.auto_open_check = Toggle("Открывать папку после конвертации")
-        auto_open = self.settings.get('auto_open_folder', True)
-        self.auto_open_check.setChecked(auto_open if auto_open is not None else True)
-
-        self.keep_name_check = Toggle("Сохранять оригинальное имя файла")
-        keep_name = self.settings.get('keep_original_name', True)
-        self.keep_name_check.setChecked(keep_name if keep_name is not None else True)
-
-        self.notifications_check = Toggle("Показывать уведомления")
-        show_notifications = self.settings.get('show_notifications', True)
-        self.notifications_check.setChecked(show_notifications if show_notifications is not None else True)
-
-        # Максимум одновременных задач
-        max_jobs_layout = QHBoxLayout()
-        max_jobs_layout.addWidget(QLabel("Максимум одновременных задач:"))
+        # Общие
         self.max_jobs_spin = GlassSpin()
         self.max_jobs_spin.setRange(1, 10)
         self.max_jobs_spin.setValue(self.settings.get('max_concurrent_jobs', 3))
-
-        # Обновляем менеджер при изменении
         self.max_jobs_spin.valueChanged.connect(self._update_max_concurrent)
+        self.auto_open_check = Toggle()
+        self.auto_open_check.setChecked(self.settings.get('auto_open_folder', True) is not False)
+        self.keep_name_check = Toggle()
+        self.keep_name_check.setChecked(self.settings.get('keep_original_name', True) is not False)
+        self.notifications_check = Toggle()
+        self.notifications_check.setChecked(self.settings.get('show_notifications', True) is not False)
+        general = InsetSection("Общие")
+        general.add(Row("Одновременных задач", self.max_jobs_spin, "bolt", "#FF9500"))
+        general.add(Row("Открывать папку после конвертации", self.auto_open_check, "folder", "#007AFF"))
+        general.add(Row("Сохранять исходное имя файла", self.keep_name_check, "tag", "#34C759"))
+        general.add(Row("Уведомления", self.notifications_check, "bell", "#FF3B30"))
+        layout.addWidget(general)
 
-        max_jobs_layout.addWidget(self.max_jobs_spin)
-        max_jobs_layout.addStretch()
-        general_layout.addLayout(max_jobs_layout)
-
-        general_layout.addWidget(self.auto_open_check)
-        general_layout.addWidget(self.keep_name_check)
-        general_layout.addWidget(self.notifications_check)
-
-        layout.addWidget(general_group)
-
-        # Кнопка сохранения
-        save_btn = GlassButton("Сохранить настройки")
-        save_btn.clicked.connect(self.save_settings)
-        save_btn.setFixedHeight(52)
-        save_btn.setProperty("primary", True)
-        layout.addWidget(save_btn)
-
+        # LibreOffice: состояние и прогресс автоустановки
+        self.libreoffice_status_label = QLabel("Проверка…")
+        self.libreoffice_status_label.setProperty("value", True)
+        self.status_progress_bar = GlassProgress()
+        self.status_progress_bar.setFixedWidth(110)
+        self.status_progress_bar.hide()
+        lo_state = QWidget()
+        lo_layout = QHBoxLayout(lo_state)
+        lo_layout.setContentsMargins(0, 0, 0, 0)
+        lo_layout.setSpacing(10)
+        lo_layout.addWidget(self.status_progress_bar, 0, Qt.AlignmentFlag.AlignVCenter)
+        lo_layout.addWidget(self.libreoffice_status_label)
+        office = InsetSection("LibreOffice", "Нужен для документов Word, Excel и PowerPoint. Скачивается автоматически.")
+        office.add(Row("Состояние", lo_state, "box", "#8E8E93"))
+        layout.addWidget(office)
         layout.addStretch()
 
-        # Устанавливаем содержимое в скролл
-        scroll.setWidget(content_widget)
-
-        # Добавляем скролл в родительский виджет
+        scroll.setWidget(content)
         parent_layout = QVBoxLayout(parent)
         parent_layout.setContentsMargins(0, 0, 0, 0)
         parent_layout.addWidget(scroll)
 
-    def setup_log_tab(self, parent: QWidget):
-        """Настраивает вкладку лога"""
-        layout = QVBoxLayout(parent)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # Настройки сохраняются сами, как в iOS: через 0,4 с после последнего изменения
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(400)
+        self._save_timer.timeout.connect(self.save_settings)
+        schedule = lambda *_: self._save_timer.start()  # noqa: E731 — сигналы передают значение, start(int) его бы принял
+        for w in (self.quality_slider, self.pdf_quality_slider, self.heic_quality_slider, self.max_width_spin,
+                  self.max_height_spin, self.pdf_dpi_spin, self.pdf_compress_spin, self.max_jobs_spin):
+            w.valueChanged.connect(schedule)
+        for w in (self.pdf_remove_metadata_check, self.pdf_optimize_images_check, self.auto_open_check,
+                  self.keep_name_check, self.notifications_check):
+            w.toggled.connect(schedule)
+        self.table_strategy_combo.currentIndexChanged.connect(schedule)
 
-        log_group = GlassGroup("Журнал")
-        log_layout = QVBoxLayout(log_group)
+    def setup_log_tab(self, parent: QWidget):
+        """Страница журнала"""
+        layout = QVBoxLayout(parent)
+        layout.setContentsMargins(24, 0, 24, 100)
+        layout.setSpacing(18)
+        clear_log_btn = IconButton("trash", "Очистить журнал")
+        clear_log_btn.clicked.connect(lambda: self.log_text.clear())
+        layout.addWidget(PageHeader("Журнал", [clear_log_btn]))
+
+        section = InsetSection()
+        section.rows.setContentsMargins(14, 10, 14, 10)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         mono.setPixelSize(12)
         self.log_text.setFont(mono)
-        log_layout.addWidget(self.log_text)
-        layout.addWidget(log_group, 1)
-
-        # Кнопки управления логом
-        log_buttons_layout = QHBoxLayout()
-
-        clear_log_btn = GlassButton("Очистить лог")
-        clear_log_btn.setFixedHeight(36)
-        clear_log_btn.clicked.connect(lambda: self.log_text.clear())
-        log_buttons_layout.addWidget(clear_log_btn)
-
-        log_buttons_layout.addStretch()
-        layout.addLayout(log_buttons_layout)
+        section.add(self.log_text, 1)
+        layout.addWidget(section, 1)
 
     def setup_callbacks(self):
         """Настраивает callback'и менеджера задач"""
@@ -686,8 +518,6 @@ class MainWindow(QMainWindow):
             'keep_original_name': self.keep_name_check.isChecked(),
             'show_notifications': self.notifications_check.isChecked(),
         })
-
-        self.show_info_signal.emit("Успех", "Настройки сохранены")
 
     def _update_max_concurrent(self, value: int):
         """Обновляет максимальное количество одновременных задач"""
@@ -869,7 +699,10 @@ class MainWindow(QMainWindow):
                 ext = file_path.suffix.lower().lstrip('.')
                 if ext == input_format or input_format == 'Все':
                     valid_count += 1
-            self.status_label.setText(f"Готов к работе ({valid_count}/{count} файл(ов) соответствуют формату)")
+            text = f"{files_word(count)} в очереди"
+            if valid_count < count:
+                text += f", подходят по формату: {valid_count}"
+            self.status_label.setText(text)
 
     def show_file_context_menu(self, position):
         """Показывает контекстное меню для файлов"""
@@ -1018,7 +851,9 @@ class MainWindow(QMainWindow):
         # Блокируем кнопку и запускаем таймер
         self.conversion_in_progress = True
         self.convert_btn.setEnabled(False)
-        self.status_label.setText(f"Конвертация запущена ({added_count} файлов)")
+        self.total_progress.setValue(0)
+        self.total_progress.show()
+        self.status_label.setText(f"Конвертация: {files_word(added_count)}")
 
         # Запускаем таймер если еще не запущен
         if not self.status_timer.isActive():
@@ -1041,8 +876,7 @@ class MainWindow(QMainWindow):
             total_progress = sum(job.get_progress() for job in jobs) // total
             self.total_progress.setValue(total_progress)
 
-        self.status_label.setText(f"Активных: {active}, Завершено: {completed}/{total}")
-        self.active_jobs_label.setText(f"Активных: {active}")
+        self.status_label.setText(f"Готово {completed} из {total}" + (f" · в работе: {active}" if active else ""))
 
         # Проверяем завершение всех задач
         active_jobs = [j for j in jobs if j.get_status() in [JobStatus.PENDING, JobStatus.PROCESSING]]
@@ -1051,15 +885,15 @@ class MainWindow(QMainWindow):
             self.status_timer.stop()
             self.conversion_in_progress = False
             self.update_convert_button()
-            self.status_label.setText(f"Конвертация завершена! ({completed} успешно, {failed} с ошибками)")
+            self.status_label.setText(f"Готово: {files_word(completed)}" + (f", ошибок: {failed}" if failed else ""))
             self.total_progress.setValue(100)
-            self.active_jobs_label.setText("Активных: 0")
+            QTimer.singleShot(1500, lambda: self.conversion_in_progress or self.total_progress.hide())
 
             if self.settings.get('show_notifications', True):
                 if failed:
-                    self.toast.show_message(f"Готово: {completed}, с ошибками: {failed}", "error", 5000)
+                    self.toast.show_message(f"Готово: {files_word(completed)}, ошибок: {failed}", "error", 5000)
                 else:
-                    self.toast.show_message(f"Готово: {completed} файл(ов)", "success")
+                    self.toast.show_message(f"Готово: {files_word(completed)}", "success")
 
             if self.settings.get('auto_open_folder', True) and completed > 0:
                 output_dir = self.settings.get('output_directory')
