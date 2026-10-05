@@ -50,6 +50,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ghostscript poppler-utils
+          # Для самопроверки собранного приложения: виртуальный экран и библиотеки Qt (xcb)
+          sudo apt-get install -y xvfb libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-shape0 libegl1
 
       - name: System deps (macOS)
         if: runner.os == 'macOS'
@@ -58,6 +61,28 @@ jobs:
 
       - name: Build
         run: python build.py
+
+      # Сборка может быть «зелёной», а приложение — падать при запуске (например, если PyInstaller
+      # не захватил модуль). Запускаем собранную программу так, как её получат пользователи.
+      - name: Self-test of the built app
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) run=(timeout 300 dist/FileConverterPro/FileConverterPro.exe) ;;
+            Linux)   run=(timeout 300 xvfb-run -a dist/FileConverterPro/FileConverterPro) ;;
+            macOS)   run=(perl -e 'alarm 300; exec @ARGV' dist/FileConverterPro.app/Contents/MacOS/FileConverterPro) ;;
+          esac
+          report="$RUNNER_TEMP/selftest.txt"
+          set +e
+          "${run[@]}" --self-test="$report"
+          rc=$?
+          set -e
+          if [ -f "$report" ]; then cat "$report"; else echo "Отчёта нет — собранное приложение упало при запуске (код $rc)"; fi
+          for log in "$APPDATA/FileConverterPro/logs/app.log" "$HOME/.config/file-converter/logs/app.log" \
+                     "$HOME/Library/Application Support/FileConverterPro/logs/app.log"; do
+            if [ -f "$log" ]; then echo "--- конец лога приложения:"; tail -n 30 "$log"; fi
+          done
+          exit $rc
 
       - name: Package into zip
         shell: bash

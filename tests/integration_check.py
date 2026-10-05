@@ -63,6 +63,11 @@ def main() -> int:
     wait(app, 1.0)
 
     try:
+        if os.environ.get("FCP_EXPECT_NON_ADMIN") and sys.platform == "win32":
+            import ctypes
+            check("Запущено от обычного пользователя, без прав администратора",
+                  not ctypes.windll.shell32.IsUserAnAdmin(), os.environ.get("USERNAME", ""))
+
         # 1. Вкладки
         for i in (1, 2, 0):
             w.tabs.setCurrentIndex(i)

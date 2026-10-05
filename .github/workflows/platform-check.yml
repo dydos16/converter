@@ -1,0 +1,168 @@
+name: Platform check
+
+# Полная проверка на настоящих Windows и Linux (x86-64):
+#  • smoke-тесты;
+#  • сквозная проверка: окно, конвертация через интерфейс, автоустановка LibreOffice с нуля, DOCX → PDF;
+#  • настоящий экран и настоящая мышь: клики, колёсико, перетаскивание линзы и окна, скриншоты;
+#  • Windows: автоустановка LibreOffice от обычного пользователя без прав администратора;
+#  • Windows: запускается ли выпущенная v1.0.0 (диагностика).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "run.py"
+      - "requirements.txt"
+      - ".github/workflows/platform-check.yml"
+
+env:
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Smoke tests
+        run: python tests/test_smoke.py
+
+      - name: Integration check (offscreen, LibreOffice from scratch)
+        run: python tests/integration_check.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Real screen and mouse
+        run: python tests/ui_check.py screenshots
+
+      - name: LibreOffice auto-install as a standard user (no admin rights)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $user = 'fcptester'
+          $pw = ConvertTo-SecureString 'Fcp-Ci-2026-Check!' -AsPlainText -Force
+          # Обычный пользователь: в группу администраторов не добавляем
+          New-LocalUser -Name $user -Password $pw -PasswordNeverExpires | Out-Null
+          $app = 'C:\fcp-app'; $tmp = 'C:\fcp-tmp'
+          Copy-Item -Recurse -Force $PWD $app
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          icacls $app /grant "${user}:(OI)(CI)RX" /T /Q | Out-Null
+          icacls $tmp /grant "${user}:(OI)(CI)F" /T /Q | Out-Null
+
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = (Get-Command python).Source
+          $psi.Arguments = 'tests\integration_check.py'
+          $psi.WorkingDirectory = $app
+          $psi.UserName = $user
+          $psi.Password = $pw
+          $psi.LoadUserProfile = $true
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          # Окружение по умолчанию — от администратора; пути переводим на профиль нового пользователя
+          $home_ = "C:\Users\$user"
+          $e = $psi.Environment
+          $e['USERNAME'] = $user
+          $e['USERPROFILE'] = $home_
+          $e['HOMEPATH'] = "\Users\$user"
+          $e['APPDATA'] = "$home_\AppData\Roaming"
+          $e['LOCALAPPDATA'] = "$home_\AppData\Local"
+          $e['TEMP'] = $tmp
+          $e['TMP'] = $tmp
+          $e['QT_QPA_PLATFORM'] = 'offscreen'
+          $e['FCP_EXPECT_NON_ADMIN'] = '1'
+
+          $p = [System.Diagnostics.Process]::Start($psi)
+          $out = $p.StandardOutput.ReadToEndAsync()
+          $err = $p.StandardError.ReadToEndAsync()
+          if (-not $p.WaitForExit(1500000)) { $p.Kill(); throw 'Проверка не уложилась в 25 минут' }
+          $out.Result
+          $err.Result -split "`n" | Select-String -Pattern 'Traceback|Error|msiexec|FAIL' | ForEach-Object { $_.Line }
+          exit $p.ExitCode
+
+      - name: Released v1.0.0 — does it start? (diagnostic)
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.0.0 --repo $env:GITHUB_REPOSITORY --pattern '*Windows*' --dir old
+          Expand-Archive (Get-ChildItem old\*.zip | Select-Object -First 1).FullName old\app
+          $exe = Get-ChildItem old\app -Recurse -Filter FileConverterPro.exe | Select-Object -First 1
+          $p = Start-Process $exe.FullName -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) {
+            "v1.0.0 закрылась сама через считанные секунды после запуска (код $($p.ExitCode))"
+            $log = "$env:APPDATA\FileConverterPro\logs\app.log"
+            if (Test-Path $log) { Get-Content $log -Tail 20 }
+            exit 1
+          }
+          'v1.0.0 работает 20 секунд после запуска'
+          Stop-Process $p
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true      # переполненная квота хранилища не должна валить проверку
+        with:
+          name: screenshots-windows
+          path: screenshots
+          retention-days: 7
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: System packages (virtual screen, window manager, Qt and LibreOffice libraries)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb openbox xdotool \
+            libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-xinerama0 libxcb-shape0 libxcb-xfixes0 libegl1 libgl1 \
+            libxinerama1 libnss3 libdbus-1-3 libcairo2 libx11-xcb1 libxext6 libcups2 libfontconfig1 \
+            libfreetype6 libgssapi-krb5-2 libxrender1 libsm6 libice6 libxrandr2 fonts-dejavu-core
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Smoke tests
+        run: python tests/test_smoke.py
+
+      - name: Integration check (offscreen, LibreOffice from scratch, x86-64)
+        run: python tests/integration_check.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Real screen and mouse (Xvfb + openbox)
+        run: |
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1600x1000x24 &
+          sleep 2
+          openbox &
+          sleep 2
+          python tests/ui_check.py screenshots
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: screenshots-linux
+          path: screenshots
+          retention-days: 7

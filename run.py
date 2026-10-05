@@ -32,7 +32,10 @@ def main():
     from src.utils.helpers import get_config_dir
     logger.add(get_config_dir() / 'logs' / 'app.log', 
                rotation='10 MB', retention='30 days', level='DEBUG')
-    logger.add(sys.stderr, level='INFO')
+    # В оконной сборке Windows (PyInstaller --windowed) консоли нет и sys.stderr = None —
+    # loguru на нём падает, и приложение не запустилось бы вовсе
+    if sys.stderr is not None:
+        logger.add(sys.stderr, level='INFO')
     
     logger.info("Запуск File Converter Pro")
     
@@ -53,11 +56,23 @@ def main():
     from src.gui.main_window import MainWindow
     window = MainWindow()
     window.show()
-    
-    # Фоновая проверка LibreOffice и авто-докачка при его отсутствии (не блокируют GUI)
-    window.maybe_start_libreoffice_install()
-    window.libreoffice_manager.start_periodic_check()
-    
+
+    # --self-test[=отчёт.txt]: проверка собранного приложения в CI, без докачки LibreOffice
+    self_test = next((a for a in sys.argv if a.startswith('--self-test')), None)
+    if self_test:
+        from PySide6.QtCore import QTimer
+        from src.selftest import run_self_test
+        report = Path(self_test.split('=', 1)[1]) if '=' in self_test else None
+        def finish():
+            code = run_self_test(window, report)
+            window.close()          # штатно останавливает фоновые потоки, иначе Qt прервёт процесс
+            app.exit(code)
+        QTimer.singleShot(1500, finish)
+    else:
+        # Фоновая проверка LibreOffice и авто-докачка при его отсутствии (не блокируют GUI)
+        window.maybe_start_libreoffice_install()
+        window.libreoffice_manager.start_periodic_check()
+
     sys.exit(app.exec())
 
 
