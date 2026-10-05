@@ -37,7 +37,39 @@ def test_stylesheets_have_no_unfilled_tokens():
         assert "$" not in get_stylesheet_for(mode)
 
 
+def test_unpack_deb_extracts_files_and_skips_absolute_symlinks(tmp_path=None):
+    import io
+    import tarfile
+    import tempfile
+    from src.core.libreoffice_manager import unpack_deb
+    tmp = Path(tmp_path or tempfile.mkdtemp())
+
+    data = io.BytesIO()
+    with tarfile.open(fileobj=data, mode="w:xz") as tar:
+        body = b"#!/bin/sh\n"
+        info = tarfile.TarInfo("./opt/libreoffice9.9/program/soffice")
+        info.size, info.mode = len(body), 0o755
+        tar.addfile(info, io.BytesIO(body))
+        link = tarfile.TarInfo("./usr/bin/libreoffice9.9")
+        link.type, link.linkname = tarfile.SYMTYPE, "/opt/libreoffice9.9/program/soffice"
+        tar.addfile(link)
+
+    def member(name, payload):
+        head = f"{name:<16}{0:<12}{0:<6}{0:<6}{100644:<8}{len(payload):<10}`\n".encode()
+        return head + payload + (b"\n" if len(payload) % 2 else b"")
+
+    deb = tmp / "pkg.deb"
+    deb.write_bytes(b"!<arch>\n" + member("debian-binary", b"2.0\n")
+                    + member("control.tar.xz", b"x") + member("data.tar.xz", data.getvalue()))
+    unpack_deb(deb, tmp / "out")
+
+    soffice = tmp / "out/opt/libreoffice9.9/program/soffice"
+    assert soffice.read_bytes() == b"#!/bin/sh\n" and os.access(soffice, os.X_OK)
+    assert not (tmp / "out/usr/bin/libreoffice9.9").exists()   # абсолютная ссылка пропущена
+
+
 if __name__ == "__main__":
+    test_unpack_deb_extracts_files_and_skips_absolute_symlinks()
     test_parallel_threads_get_distinct_libreoffice_profiles()
     test_stylesheets_have_no_unfilled_tokens()
     print("ok")

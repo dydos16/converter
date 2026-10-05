@@ -19,6 +19,35 @@ from loguru import logger
 from PySide6.QtCore import QObject, QTimer, QThread, Signal
 
 
+def _skip_unsafe(member: tarfile.TarInfo, dest: str):
+    """Фильтр 'data', но небезопасные элементы пропускаем, а не падаем.
+    В .deb есть абсолютные симлинки вроде /usr/bin/libreoffice -> /opt/...: нам они не нужны."""
+    try:
+        return tarfile.data_filter(member, dest)
+    except tarfile.FilterError:
+        return None
+
+
+def unpack_deb(deb: Path, dest: Path) -> None:
+    """Распаковывает .deb без dpkg и sudo: это ar-архив, программа лежит в data.tar.*"""
+    with open(deb, 'rb') as f:
+        if f.read(8) != b'!<arch>\n':
+            raise ValueError(f"{deb.name}: не ar-архив")
+        while header := f.read(60):
+            name = header[:16].decode().strip().rstrip('/')
+            size = int(header[48:58])
+            start = f.tell()
+            if name.startswith('data.tar'):
+                if name.endswith('.zst'):
+                    raise ValueError(f"{deb.name}: zstd не поддерживается стандартной библиотекой")
+                # 'r|*' читает поток последовательно и сам определяет xz/gz/bz2
+                with tarfile.open(fileobj=f, mode='r|*') as tar:
+                    tar.extractall(dest, filter=_skip_unsafe)
+                return
+            f.seek(start + size + (size % 2))   # элементы ar выровнены по 2 байта
+    raise ValueError(f"{deb.name}: нет data.tar")
+
+
 class LibreOfficeManager(QObject):
     """Синглтон-менеджер для управления LibreOffice (soffice) с ленивой загрузкой."""
 
@@ -81,9 +110,10 @@ class LibreOfficeManager(QObject):
                 app_support / "windows" / "LibreOffice" / "program" / "soffice.exe",
             ])
         else:  # Linux
-            possible_paths.extend([
-                app_support / "linux" / "usr" / "bin" / "soffice",
-            ])
+            possible_paths.append(app_support / "linux" / "usr" / "bin" / "soffice")
+            # Из .deb программа попадает в opt/libreoffice<версия>/program
+            possible_paths.extend(sorted((app_support / "linux" / "opt").glob("libreoffice*/program/soffice"),
+                                         reverse=True))
 
         # 2. Системные пути
         if system == "Darwin":
@@ -286,7 +316,8 @@ class LibreOfficeManager(QObject):
         elif system == 'windows':
             return f"{base}/libreoffice_windows.zip"
         else:
-            return f"{base}/libreoffice_linux.tar.gz"
+            return (f"{base}/LibreOffice_26.2.2_Linux_aarch64_deb.tar.gz" if arch == 'arm64'
+                    else f"{base}/libreoffice_linux.tar.gz")
 
     def _download_with_progress(self, url: str, dest: Path) -> bool:
         """Скачивает файл по URL, отчитываясь о прогрессе."""
@@ -332,6 +363,9 @@ class LibreOfficeManager(QObject):
         except OSError:
             pass
 
+        if platform.system().lower() == 'linux':
+            self._unpack_linux_debs(app_support)
+
         # Для macOS снимаем quarantine и ставим права
         if platform.system().lower() == 'darwin':
             for lo_app in (a for a in self._bundled_mac_apps() if a.exists()):
@@ -340,6 +374,18 @@ class LibreOfficeManager(QObject):
                 subprocess.run(['chmod', '-R', '755', str(lo_app)], stderr=subprocess.DEVNULL)
                 subprocess.run(['codesign', '--force', '--deep', '--sign', '-', str(lo_app)],
                                capture_output=True)
+
+    def _unpack_linux_debs(self, app_support: Path) -> None:
+        """Linux-архив — официальный набор .deb, а не готовая программа: разворачиваем пакеты сами."""
+        for bundle in app_support.glob("LibreOffice_*_deb"):
+            # «._*.deb» — служебные двойники macOS (AppleDouble), если архив собирали на Mac
+            debs = sorted(d for d in bundle.glob("DEBS/*.deb") if not d.name.startswith("._"))
+            for i, deb in enumerate(debs, 1):
+                self.install_progress.emit(99, f"Установка пакетов LibreOffice {i}/{len(debs)}...")
+                unpack_deb(deb, app_support / "linux")
+            shutil.rmtree(bundle, ignore_errors=True)   # сами .deb больше не нужны
+        for junk in app_support.glob("._*"):
+            junk.unlink(missing_ok=True)
 
     def start_auto_install(self):
         """
