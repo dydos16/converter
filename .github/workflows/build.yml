@@ -87,6 +87,8 @@ jobs:
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
+        # Переполненная квота хранилища не должна валить сборку и блокировать публикацию релиза
+        continue-on-error: true
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.asset }}
