@@ -4,6 +4,7 @@
 Использует оптимизированные параметры запуска для ускорения конвертации.
 """
 
+import hashlib
 import subprocess
 import platform
 import os
@@ -25,6 +26,30 @@ LINUX_DEPS_COMMAND = (
     "sudo apt install libxinerama1 libnss3 libdbus-1-3 libcairo2 libx11-6 libx11-xcb1 "
     "libxext6 libcups2 libfontconfig1 libfreetype6 libgssapi-krb5-2 libxrender1 libsm6 libice6 libxrandr2"
 )
+
+
+# Контрольные суммы архивов LibreOffice из релиза v1.0.0 (GitHub отдаёт их в API: assets[].digest).
+# Скачанное запускается как программа, поэтому подменённый или битый архив не распаковываем.
+# При обновлении архивов в релизе — обновить и суммы здесь.
+LIBREOFFICE_SHA256 = {
+    "libreoffice_macos_arm64.tar.gz": "a277c1c89706bfe4badf43fff75c3337a121904350a11d2f97fd5ef507b95f9b",
+    "libreoffice_macos.tar.gz": "c8f508773c9db0ed836f187a66a040226ab79e6a778e7b077c674aa9b28932e1",
+    "libreoffice_windows.zip": "70ff1285b200517b04dbf1756be774206632d07f721eed1368177c4d3682f7c9",
+    "libreoffice_linux.tar.gz": "a62201db60a26d69d7fa8c21ccd1877f80444c15b82cfdfa11bbd7452d989864",
+    "LibreOffice_26.2.2_Linux_aarch64_deb.tar.gz": "748403f78d6147c2af2a049f9cf913e553b191dd0a8cfea47f5cb12c1c221a2c",
+}
+
+
+def sha256_matches(path: Path, asset_name: str) -> bool:
+    """Совпадает ли sha256 файла с известной суммой архива. Неизвестный архив — не доверяем."""
+    expected = LIBREOFFICE_SHA256.get(asset_name)
+    if expected is None:
+        return False
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest() == expected
 
 
 def missing_libraries(stderr: str) -> list[str]:
@@ -470,6 +495,15 @@ class LibreOfficeManager(QObject):
             if not self._download_with_progress(url, archive_path):
                 self.install_progress.emit(0, "Ошибка скачивания LibreOffice")
                 self.install_finished.emit(False, "Не удалось скачать LibreOffice. Проверьте интернет-соединение.")
+                return
+
+            self.install_progress.emit(100, "Проверка целостности LibreOffice...")
+            if not sha256_matches(archive_path, url.rsplit('/', 1)[1]):
+                archive_path.unlink(missing_ok=True)
+                logger.error(f"sha256 скачанного архива не совпадает с ожидаемой: {url}")
+                self.install_progress.emit(0, "Архив LibreOffice повреждён")
+                self.install_finished.emit(False, "Скачанный LibreOffice повреждён или подменён — установка отменена. "
+                                                  "Попробуйте ещё раз позже.")
                 return
 
             self._extract_libreoffice(archive_path)

@@ -78,7 +78,37 @@ def test_missing_linux_libraries_are_recognised():
     assert missing_libraries("Error: source file could not be loaded") == []
 
 
+def test_libreoffice_archive_checksum():
+    import hashlib
+    import tempfile
+    from src.core import libreoffice_manager as lm
+    f = Path(tempfile.mkdtemp()) / "archive.tar.gz"
+    f.write_bytes(b"not really libreoffice")
+    good = hashlib.sha256(b"not really libreoffice").hexdigest()
+    old = dict(lm.LIBREOFFICE_SHA256)
+    try:
+        lm.LIBREOFFICE_SHA256["archive.tar.gz"] = good
+        assert lm.sha256_matches(f, "archive.tar.gz")
+        lm.LIBREOFFICE_SHA256["archive.tar.gz"] = "0" * 64           # подменённый архив
+        assert not lm.sha256_matches(f, "archive.tar.gz")
+        assert not lm.sha256_matches(f, "unknown.tar.gz")            # неизвестному не доверяем
+    finally:
+        lm.LIBREOFFICE_SHA256.clear()
+        lm.LIBREOFFICE_SHA256.update(old)
+    # у каждого архива, который приложение может скачать, есть сумма
+    for name in ("libreoffice_macos_arm64.tar.gz", "libreoffice_macos.tar.gz", "libreoffice_windows.zip",
+                 "libreoffice_linux.tar.gz", "LibreOffice_26.2.2_Linux_aarch64_deb.tar.gz"):
+        assert len(lm.LIBREOFFICE_SHA256[name]) == 64, name
+
+
+def test_file_size_is_russian():
+    from src.utils.helpers import format_size
+    assert [format_size(n) for n in (183, 4300, 12_500_000)] == ["183 Б", "4,2 КБ", "11,9 МБ"]
+
+
 if __name__ == "__main__":
+    test_libreoffice_archive_checksum()
+    test_file_size_is_russian()
     test_missing_linux_libraries_are_recognised()
     test_unpack_deb_extracts_files_and_skips_absolute_symlinks()
     test_parallel_threads_get_distinct_libreoffice_profiles()

@@ -764,8 +764,9 @@ class PrimaryButton(_GlassTouch, QPushButton):
             return
         self._apply_touch(p, r)
         h = self._hover.value
-        body = paint_liquid_glass(p, r, radius, fill=mix(ACCENT, QColor("#2B8CFF"), h),
-                                  rim=QColor(255, 255, 255, 110), shadow=alpha(ACCENT, .35), reach=10)
+        base = RED if self.property("danger") else ACCENT     # «Остановить» — красная
+        body = paint_liquid_glass(p, r, radius, fill=mix(base, base.lighter(115), h),
+                                  rim=QColor(255, 255, 255, 110), shadow=alpha(base, .35), reach=10)
         self._paint_glow(p, body)
         p.setFont(font(15, QFont.Weight.DemiBold))
         p.setPen(QColor("#FFFFFF"))

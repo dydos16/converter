@@ -83,6 +83,12 @@ class MainWindow(QMainWindow):
 
         # Флаг для блокировки повторного запуска
         self.conversion_in_progress = False
+        # Задачи текущего запуска: JobManager хранит все задачи за сеанс, а считать надо только эти
+        self._batch: list[str] = []
+        self._stopping = False
+
+        # Тема «Системная» следует за ОС на лету, а не только при запуске
+        QApplication.styleHints().colorSchemeChanged.connect(self._on_system_scheme_changed)
 
         # Подключаем сигналы
         self.show_info_signal.connect(self._show_info_message)
@@ -202,6 +208,10 @@ class MainWindow(QMainWindow):
             app.setPalette(get_palette_for(mode))
             app.setStyleSheet(get_stylesheet_for(mode))
 
+    def _on_system_scheme_changed(self, *_):
+        if self.settings.get('theme', 'system') == 'system':
+            self.apply_theme('system')
+
     def on_theme_changed(self, mode: str):
         """Обработчик смены темы в настройках — применяет сразу."""
         self.apply_theme(mode)
@@ -319,7 +329,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.total_progress)
 
         self.convert_btn = PrimaryButton("Конвертировать")
-        self.convert_btn.clicked.connect(self.start_conversion)
+        self.convert_btn.clicked.connect(lambda: self.stop_conversion() if self.conversion_in_progress
+                                         else self.start_conversion())
         self.convert_btn.setEnabled(False)
         self.convert_btn.setFixedSize(self.convert_btn.sizeHint())   # с полем под «подъём» при нажатии
         layout.addWidget(self.convert_btn, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -585,10 +596,15 @@ class MainWindow(QMainWindow):
 
     def update_convert_button(self):
         """Обновляет состояние кнопки конвертации"""
-        # Если конвертация уже идет, не даем нажать
+        # Во время конвертации кнопка превращается в «Остановить»
         if self.conversion_in_progress:
-            self.convert_btn.setEnabled(False)
+            self.convert_btn.setText("Останавливаю…" if self._stopping else "Остановить")
+            self.convert_btn.setProperty("danger", True)
+            self.convert_btn.setEnabled(not self._stopping)
+            self.convert_btn.update()
             return
+        self.convert_btn.setText("Конвертировать")
+        self.convert_btn.setProperty("danger", False)
 
         has_files = self.file_list.count() > 0
         has_format = self.input_format_combo.currentText() != 'Все' and self.input_format_combo.currentText()
@@ -787,6 +803,7 @@ class MainWindow(QMainWindow):
             self.file_list.item(i).setData(PROGRESS_ROLE, None)
 
         added_count = 0
+        self._batch = []
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
             input_path = Path(item.data(Qt.ItemDataRole.UserRole))
@@ -832,13 +849,14 @@ class MainWindow(QMainWindow):
                 kwargs['quality'] = self.settings.get('heic_quality', 85)
 
             self.file_list.item(i).setData(PROGRESS_ROLE, 0)
-            self.job_manager.add_job(
+            job_id = self.job_manager.add_job(
                 input_path,
                 output_path,
                 input_format,
                 output_format,
                 **kwargs
             )
+            self._batch.append(job_id)
             added_count += 1
 
         if added_count == 0:
@@ -848,9 +866,10 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Блокируем кнопку и запускаем таймер
+        # Кнопка становится «Остановить», запускаем таймер
         self.conversion_in_progress = True
-        self.convert_btn.setEnabled(False)
+        self._stopping = False
+        self.update_convert_button()
         self.total_progress.setValue(0)
         self.total_progress.show()
         self.status_label.setText(f"Конвертация: {files_word(added_count)}")
@@ -859,10 +878,25 @@ class MainWindow(QMainWindow):
         if not self.status_timer.isActive():
             self.status_timer.start()
 
+    def stop_conversion(self):
+        """Отменяет файлы, которые ещё ждут в очереди. Те, что уже конвертируются, доделываются."""
+        # ponytail: идущий файл не прерываем — LibreOffice пришлось бы убивать вместе с его процессом;
+        # добавить, если конвертации одного файла станут долгими
+        cancelled = 0
+        for job_id in self._batch:
+            if self.job_manager.cancel_job(job_id):
+                cancelled += 1
+                job = self.job_manager.get_job(job_id)
+                self._update_file_item_progress(str(job.input_path), None)
+        self._stopping = True
+        self.update_convert_button()
+        self.status_label.setText(f"Останавливаю… отменено: {files_word(cancelled)}")
+        self.update_status()
+
     def update_status(self):
         """Обновляет статус"""
         active = self.job_manager.get_active_jobs_count()
-        jobs = self.job_manager.get_all_jobs()
+        jobs = [j for j in (self.job_manager.get_job(i) for i in self._batch) if j is not None]
 
         if not jobs:
             return
@@ -870,6 +904,7 @@ class MainWindow(QMainWindow):
         total = len(jobs)
         completed = sum(1 for job in jobs if job.get_status() == JobStatus.COMPLETED)
         failed = sum(1 for job in jobs if job.get_status() == JobStatus.FAILED)
+        cancelled = sum(1 for job in jobs if job.get_status() == JobStatus.CANCELLED)
 
         # Считаем средний прогресс
         if total > 0:
@@ -884,16 +919,19 @@ class MainWindow(QMainWindow):
         if not active_jobs and total > 0:
             self.status_timer.stop()
             self.conversion_in_progress = False
+            self._stopping = False
             self.update_convert_button()
-            self.status_label.setText(f"Готово: {files_word(completed)}" + (f", ошибок: {failed}" if failed else ""))
+            summary = f"Готово: {files_word(completed)}" + (f", ошибок: {failed}" if failed else "") + \
+                      (f", отменено: {cancelled}" if cancelled else "")
+            self.status_label.setText(summary)
             self.total_progress.setValue(100)
             QTimer.singleShot(1500, lambda: self.conversion_in_progress or self.total_progress.hide())
 
             if self.settings.get('show_notifications', True):
-                if failed:
-                    self.toast.show_message(f"Готово: {files_word(completed)}, ошибок: {failed}", "error", 5000)
-                else:
-                    self.toast.show_message(f"Готово: {files_word(completed)}", "success")
+                self.toast.show_message(summary, "error" if failed else "success", 5000 if failed else 3200)
+                # Окно в фоне — пусть подпрыгнет значок в Dock / замигает кнопка на панели задач
+                if not self.isActiveWindow():
+                    QApplication.alert(self)
 
             if self.settings.get('auto_open_folder', True) and completed > 0:
                 output_dir = self.settings.get('output_directory')

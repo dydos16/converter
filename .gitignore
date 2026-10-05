@@ -32,3 +32,9 @@ dist/
 build/
 *.spec
 .bincache*
+
+# Служебные файлы инструментов разработчика (graphify, Claude Code) — не часть приложения
+graphify-out/
+.claude/
+CLAUDE.md
+.gitattributes

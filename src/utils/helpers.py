@@ -108,15 +108,20 @@ def get_file_size_str(path: Path) -> str:
     """Возвращает размер файла в человекочитаемом формате"""
     try:
         size = path.stat().st_size
+    except OSError:
+        return "размер неизвестен"
+    return format_size(size)
 
-        for unit in ['B', 'KB', 'MB', 'GB']:
-            if size < 1024.0:
-                return f"{size:.1f} {unit}"
-            size /= 1024.0
 
-        return f"{size:.1f} TB"
-    except Exception:
-        return "Unknown size"
+def format_size(size: float) -> str:
+    """183 Б, 4,2 КБ, 12,5 МБ — по-русски, байты без дробей."""
+    if size < 1024:
+        return f"{int(size)} Б"
+    for unit in ("КБ", "МБ", "ГБ"):
+        size /= 1024
+        if size < 1024:
+            return f"{size:.1f} {unit}".replace(".", ",")
+    return f"{size / 1024:.1f} ТБ".replace(".", ",")
 
 
 def ensure_output_directory(output_path: Path) -> bool:
