@@ -18,47 +18,11 @@ class SpreadsheetConverter(BaseConverter):
         self.openpyxl_available = self._check_openpyxl()
 
     def _check_libreoffice(self):
-        """Проверяет наличие LibreOffice"""
-        import shutil
-        import platform
-
-        for name in ['libreoffice', 'soffice']:
-            path = shutil.which(name)
-            if path:
-                self._soffice_path = Path(path)
-                return True
-
-        system = platform.system().lower()
-        project_root = Path(__file__).parent.parent.parent
-        from src.utils.helpers import get_libreoffice_dir
-        app_support = get_libreoffice_dir()
-
-        if system == 'darwin':
-            paths = [
-                app_support / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
-                project_root / "resources" / "libreoffice" / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
-                '/Applications/LibreOffice.app/Contents/MacOS/soffice',
-            ]
-            for path in paths:
-                if Path(path).exists():
-                    self._soffice_path = path
-                    return True
-        elif system == 'windows':
-            paths = [
-                app_support / "windows" / "LibreOffice" / "program" / "soffice.exe",
-                project_root / "resources" / "libreoffice" / "windows" / "LibreOffice" / "program" / "soffice.exe",
-                'C:/Program Files/LibreOffice/program/soffice.exe',
-            ]
-            for path in paths:
-                if Path(path).exists():
-                    self._soffice_path = path
-                    return True
-        else:
-            if Path('/usr/bin/libreoffice').exists():
-                self._soffice_path = Path('/usr/bin/libreoffice')
-                return True
-
-        return False
+        """Ищет soffice через общий LibreOfficeManager — одно место для всех путей установки"""
+        from src.core.libreoffice_manager import LibreOfficeManager
+        lo = LibreOfficeManager()
+        self._soffice_path = lo.get_soffice_path() or lo._find_soffice()
+        return self._soffice_path is not None
 
     def _check_openpyxl(self):
         """Проверяет наличие openpyxl"""

@@ -75,9 +75,7 @@ class LibreOfficeManager(QObject):
         # 1. Каталог App Support (встроенный / самодостаточный LibreOffice)
         app_support = self.get_app_support_dir()
         if system == "Darwin":  # macOS
-            possible_paths.extend([
-                app_support / "macos" / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
-            ])
+            possible_paths.extend(app / "Contents" / "MacOS" / "soffice" for app in self._bundled_mac_apps())
         elif system == "Windows":
             possible_paths.extend([
                 app_support / "windows" / "LibreOffice" / "program" / "soffice.exe",
@@ -135,6 +133,11 @@ class LibreOfficeManager(QObject):
 
         logger.debug("Soffice не найден в стандартных местах")
         return None
+
+    def _bundled_mac_apps(self) -> list:
+        """Где может лежать скачанный LibreOffice.app: в Intel-архиве — в macos/, в arm64 — в корне."""
+        app_support = self.get_app_support_dir()
+        return [app_support / "macos" / "LibreOffice.app", app_support / "LibreOffice.app"]
 
     def _get_user_profile_path(self) -> str:
         """
@@ -278,7 +281,8 @@ class LibreOfficeManager(QObject):
         arch = 'arm64' if machine in ('arm64', 'aarch64') else 'x86_64'
         base = "https://github.com/MiHoN135/Convertator-Releases/releases/download/v1.0.0"
         if system == 'darwin':
-            return f"{base}/libreoffice_macos_{arch}.tar.gz"
+            # В релизе Intel-сборка лежит без суффикса архитектуры
+            return f"{base}/libreoffice_macos_arm64.tar.gz" if arch == 'arm64' else f"{base}/libreoffice_macos.tar.gz"
         elif system == 'windows':
             return f"{base}/libreoffice_windows.zip"
         else:
@@ -330,8 +334,7 @@ class LibreOfficeManager(QObject):
 
         # Для macOS снимаем quarantine и ставим права
         if platform.system().lower() == 'darwin':
-            lo_app = app_support / "macos" / "LibreOffice.app"
-            if lo_app.exists():
+            for lo_app in (a for a in self._bundled_mac_apps() if a.exists()):
                 subprocess.run(['xattr', '-d', '-r', 'com.apple.quarantine', str(lo_app)],
                                stderr=subprocess.DEVNULL)
                 subprocess.run(['chmod', '-R', '755', str(lo_app)], stderr=subprocess.DEVNULL)
@@ -381,6 +384,7 @@ class LibreOfficeManager(QObject):
                 self.install_progress.emit(100, "LibreOffice установлен!")
                 self.install_finished.emit(True, "LibreOffice успешно установлен")
             else:
+                logger.error(f"После распаковки soffice не найден в {app_support}")
                 self.install_progress.emit(0, "Не удалось найти soffice после установки")
                 self.install_finished.emit(False, "LibreOffice установлен, но не найден исполняемый файл")
         except Exception as e:
