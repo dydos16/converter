@@ -100,6 +100,12 @@ sys.argv = [
 for exc in excludes:
     sys.argv.extend(["--exclude-module", exc])
 
+# Иконка: .icns — значок .app на macOS, .ico — значок .exe на Windows; PNG — для окна (run.py)
+icon = PROJECT / "packaging" / ("icon.icns" if SYSTEM == "darwin" else "icon.ico")
+if icon.exists():
+    sys.argv += ["--icon", str(icon)]
+sys.argv += ["--add-data", f"{PROJECT / 'packaging' / 'icon.png'}{os.pathsep}packaging"]
+
 sys.argv.append("run.py")
 
 info("Сборка (onedir, без numpy/opencv)...")

@@ -50,6 +50,10 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
+    from PySide6.QtGui import QIcon
+    icon = BASE / 'packaging' / 'icon.png'      # в сборке лежит рядом, см. --add-data в build.py
+    if icon.exists():
+        app.setWindowIcon(QIcon(str(icon)))
     app.setFont(QFont())
 
     # Тема из настроек: 'system' (по умолчанию) | 'light' | 'dark'
