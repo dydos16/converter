@@ -68,7 +68,18 @@ def test_unpack_deb_extracts_files_and_skips_absolute_symlinks(tmp_path=None):
     assert not (tmp / "out/usr/bin/libreoffice9.9").exists()   # абсолютная ссылка пропущена
 
 
+def test_missing_linux_libraries_are_recognised():
+    from src.core.libreoffice_manager import missing_libraries
+    # Настоящая ошибка из чистого Debian-контейнера
+    stderr = ("/root/.local/share/FileConverterPro/libreoffice/linux/opt/libreoffice26.2/program/oosplash: "
+              "error while loading shared libraries: libXinerama.so.1: cannot open shared object file: "
+              "No such file or directory")
+    assert missing_libraries(stderr) == ["libXinerama.so.1"]
+    assert missing_libraries("Error: source file could not be loaded") == []
+
+
 if __name__ == "__main__":
+    test_missing_linux_libraries_are_recognised()
     test_unpack_deb_extracts_files_and_skips_absolute_symlinks()
     test_parallel_threads_get_distinct_libreoffice_profiles()
     test_stylesheets_have_no_unfilled_tokens()

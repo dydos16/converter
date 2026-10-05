@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self.libreoffice_manager.status_changed.connect(self._on_libreoffice_status_changed)
         self.libreoffice_manager.install_progress.connect(self._on_libreoffice_install_progress)
         self.libreoffice_manager.install_finished.connect(self._on_libreoffice_install_finished)
+        self.libreoffice_manager.libraries_missing.connect(self._on_libreoffice_libraries_missing)
         self.worker = ConversionWorker(self.job_manager)
 
         # Единый таймер для обновления статуса
@@ -145,6 +146,15 @@ class MainWindow(QMainWindow):
             self.status_progress_bar.hide()
             self.libreoffice_status_label.setText("LibreOffice недоступен")
             self.libreoffice_status_label.setStyleSheet("color: #FF3B30;")
+
+    @Slot(str)
+    def _on_libreoffice_libraries_missing(self, libs: str):
+        """LibreOffice скачан, но не запускается: в системе нет нужных библиотек (бывает на серверах)."""
+        from src.core.libreoffice_manager import LINUX_DEPS_COMMAND
+        self._append_log(f"LibreOffice не запускается: в системе нет библиотек {libs}.\n"
+                         f"Установите их командой:\n{LINUX_DEPS_COMMAND}")
+        self.toast.show_message("LibreOffice не хватает системных библиотек — команда установки во вкладке «Лог»",
+                                "error", 10000)
 
     def maybe_start_libreoffice_install(self):
         """Запускает автоустановку LibreOffice при его отсутствии (не блокирует GUI)."""

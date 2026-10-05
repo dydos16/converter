@@ -7,6 +7,7 @@
 import subprocess
 import platform
 import os
+import re
 import sys
 import tarfile
 import threading
@@ -17,6 +18,18 @@ from pathlib import Path
 from typing import Optional
 from loguru import logger
 from PySide6.QtCore import QObject, QTimer, QThread, Signal
+
+
+# Пакеты, которых обычно нет только на серверах и в минимальных контейнерах
+LINUX_DEPS_COMMAND = (
+    "sudo apt install libxinerama1 libnss3 libdbus-1-3 libcairo2 libx11-6 libx11-xcb1 "
+    "libxext6 libcups2 libfontconfig1 libfreetype6 libgssapi-krb5-2 libxrender1 libsm6 libice6 libxrandr2"
+)
+
+
+def missing_libraries(stderr: str) -> list[str]:
+    """Имена библиотек из ошибки загрузчика Linux: «error while loading shared libraries: libX.so.1: ...»"""
+    return re.findall(r"error while loading shared libraries: (\S+?):", stderr or "")
 
 
 def _skip_unsafe(member: tarfile.TarInfo, dest: str):
@@ -56,6 +69,7 @@ class LibreOfficeManager(QObject):
     check_finished = Signal(bool)               # is_available после проверки
     install_progress = Signal(int, str)         # percent(0-100), status_message
     install_finished = Signal(bool, str)        # success, message
+    libraries_missing = Signal(str)             # каких системных библиотек не хватает soffice
 
     _instance: Optional['LibreOfficeManager'] = None
 
@@ -220,6 +234,17 @@ class LibreOfficeManager(QObject):
 
         return cmd
 
+    def _report_missing_libraries(self, stderr: str) -> bool:
+        """Если soffice не запустился из-за системных библиотек — сообщаем, чем их поставить."""
+        libs = missing_libraries(stderr)
+        if not libs:
+            return False
+        logger.error(f"LibreOffice не хватает системных библиотек ({', '.join(libs)}). Установите: {LINUX_DEPS_COMMAND}")
+        if not getattr(self, "_libs_reported", False):   # подсказку показываем один раз, а не на каждый файл
+            self._libs_reported = True
+            self.libraries_missing.emit(", ".join(libs))
+        return True
+
     def _check_availability(self):
         """Выполняет реальную проверку доступности soffice через --version."""
         if self._is_checking:
@@ -247,6 +272,9 @@ class LibreOfficeManager(QObject):
                         logger.info(f"LibreOffice доступен: {version_info}")
                         self._is_available = True
                         self.status_changed.emit(f"LibreOffice готов: {version_info}", True)
+                    elif self._report_missing_libraries(result.stderr):
+                        self._is_available = False
+                        self.status_changed.emit("LibreOffice: не хватает системных библиотек", False)
                     else:
                         logger.warning(f"Soffice вернул код ошибки: {result.returncode}")
                         self._is_available = False
@@ -496,6 +524,7 @@ class LibreOfficeManager(QObject):
 
             if result.returncode != 0:
                 logger.error(f"LibreOffice ошибка: {result.stderr}")
+                self._report_missing_libraries(result.stderr)
                 return False
 
             # LibreOffice создает файл с тем же именем, но .pdf в outdir

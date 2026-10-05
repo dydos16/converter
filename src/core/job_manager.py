@@ -320,7 +320,8 @@ class JobManager:
                 self._trigger_callback('on_job_completed', job)
                 logger.success(f"Задача {job.id} успешно выполнена")
             else:
-                job.mark_failed("Конвертация не удалась")
+                # Не затираем конкретную причину, если конвертер её уже сообщил
+                job.mark_failed(job.error_message or "Конвертация не удалась")
                 with self.lock:
                     self._job_counters['processing'] -= 1
                     self._job_counters['failed'] += 1
