@@ -12,6 +12,7 @@
 Код возврата 0 — всё прошло, 1 — что-то сломано.
 """
 import ctypes
+import faulthandler
 import subprocess
 import sys
 import tempfile
@@ -127,6 +128,9 @@ def check(name: str, ok: bool, detail: str = ""):
 
 
 def main() -> int:
+    # Обычно проверка идёт 20–30 с. Если что-то зависло — печатаем, где стоит каждый поток, и выходим,
+    # а не ждём тайм-аута CI
+    faulthandler.dump_traceback_later(90, exit=True)
     shots = Path(sys.argv[1]) if len(sys.argv) > 1 else None
     if shots:
         shots.mkdir(parents=True, exist_ok=True)

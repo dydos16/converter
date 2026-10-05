@@ -23,7 +23,7 @@ env:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 15   # обычно ~5 мин: зависание не должно съедать лишнее время
     steps:
       - uses: actions/checkout@v4
 
@@ -121,7 +121,7 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10   # обычно ~2 мин
     steps:
       - uses: actions/checkout@v4
 

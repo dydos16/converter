@@ -124,18 +124,22 @@ jobs:
           if (-not (Test-Path $exe)) { "После установки нет $exe"; exit 1 }
           "Установлено в: $app"
           $lnk = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\File Converter Pro.lnk'
-          "Ярлык в меню «Пуск»: $(Test-Path $lnk)"
+          # Запоминаем сейчас: деинсталлятор ниже уберёт ярлык вместе с программой
+          $lnkOk = Test-Path $lnk
+          "Ярлык в меню «Пуск»: $lnkOk"
 
           $report = Join-Path $env:RUNNER_TEMP 'installed-selftest.txt'
           $r = Start-Process $exe -ArgumentList "--self-test=$report" -PassThru
+          $null = $r.Handle   # без открытого дескриптора PowerShell может потерять код выхода
           if (-not $r.WaitForExit(300000)) { $r.Kill(); "Установленная программа не завершилась за 5 минут"; exit 1 }
           if (Test-Path $report) { Get-Content $report } else { "Отчёта нет — установленная программа упала при запуске" }
+          "Код выхода самопроверки: $($r.ExitCode)"
 
           # Деинсталлятор Inno Setup перезапускает себя из временной папки — ждём, пока исчезнет программа
           Start-Process (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
           for ($i = 0; $i -lt 30 -and (Test-Path $exe); $i++) { Start-Sleep 1 }
-          "После удаления программа осталась на диске: $(Test-Path $exe)"
-          if ($r.ExitCode -or -not (Test-Path $lnk) -or (Test-Path $exe)) { exit 1 }
+          "После удаления на диске остались — программа: $(Test-Path $exe), ярлык: $(Test-Path $lnk)"
+          if ($r.ExitCode -or -not $lnkOk -or (Test-Path $exe) -or (Test-Path $lnk)) { exit 1 }
 
       # --- Linux: AppImage — один файл, запускается на большинстве дистрибутивов
       - name: Linux AppImage
