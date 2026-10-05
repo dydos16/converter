@@ -1,0 +1,52 @@
+name: Windows check
+
+# Проверка на настоящей Windows: smoke-тесты, окно приложения без экрана,
+# конвертация через интерфейс, автоустановка LibreOffice с нуля и DOCX → PDF.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "run.py"
+      - "requirements.txt"
+      - ".github/workflows/windows-check.yml"
+
+jobs:
+  check:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Smoke tests
+        run: python tests/test_smoke.py
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Integration check (GUI, conversion, LibreOffice auto-install)
+        run: python tests/integration_check.py screenshots
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        # Переполненная квота хранилища не должна валить проверку
+        continue-on-error: true
+        with:
+          name: windows-screenshots
+          path: screenshots
+          retention-days: 7

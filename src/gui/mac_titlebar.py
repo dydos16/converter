@@ -13,7 +13,7 @@ import ctypes.util
 import sys
 
 from loguru import logger
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtWidgets import QWidget
 
 _objc = None
@@ -46,7 +46,9 @@ def _msg(obj, selector: str, *args: tuple, restype=ctypes.c_void_p):
 def style_titlebar(window: QWidget, color: QColor, dark: bool | None) -> None:
     """Прозрачная шапка без заголовка, окно цвета color.
     dark=None — «светофор» и системные элементы следуют за темой macOS."""
-    if sys.platform != "darwin":
+    # winId() — NSView только у настоящих окон Cocoa; у offscreen и других плагинов это не так,
+    # и вызов AppKit по такому адресу уронил бы процесс
+    if sys.platform != "darwin" or QGuiApplication.platformName() != "cocoa":
         return
     try:
         ns_window = _msg(int(window.winId()), "window")   # winId() на маке — это NSView

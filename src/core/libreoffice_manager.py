@@ -120,9 +120,11 @@ class LibreOfficeManager(QObject):
         if system == "Darwin":  # macOS
             possible_paths.extend(app / "Contents" / "MacOS" / "soffice" for app in self._bundled_mac_apps())
         elif system == "Windows":
-            possible_paths.extend([
-                app_support / "windows" / "LibreOffice" / "program" / "soffice.exe",
-            ])
+            # Административная распаковка MSI кладёт программу на 1–3 уровня глубже (например, PFiles\LibreOffice)
+            win = app_support / "windows" / "LibreOffice"
+            possible_paths.append(win / "program" / "soffice.exe")
+            for depth in ("*", "*/*", "*/*/*"):
+                possible_paths.extend(sorted(win.glob(f"{depth}/program/soffice.exe")))
         else:  # Linux
             possible_paths.append(app_support / "linux" / "usr" / "bin" / "soffice")
             # Из .deb программа попадает в opt/libreoffice<версия>/program
@@ -393,6 +395,8 @@ class LibreOfficeManager(QObject):
 
         if platform.system().lower() == 'linux':
             self._unpack_linux_debs(app_support)
+        elif platform.system().lower() == 'windows':
+            self._unpack_windows_msi(app_support)
 
         # Для macOS снимаем quarantine и ставим права
         if platform.system().lower() == 'darwin':
@@ -414,6 +418,26 @@ class LibreOfficeManager(QObject):
             shutil.rmtree(bundle, ignore_errors=True)   # сами .deb больше не нужны
         for junk in app_support.glob("._*"):
             junk.unlink(missing_ok=True)
+
+    def _unpack_windows_msi(self, app_support: Path) -> None:
+        """Windows-архив — это установщик .msi, а не готовая программа.
+        msiexec /a — административная распаковка: просто выкладывает файлы в нашу папку,
+        ничего не устанавливает в систему и не требует прав администратора."""
+        target = app_support / "windows" / "LibreOffice"
+        for msi in sorted(app_support.rglob("*.msi")):
+            self.install_progress.emit(99, "Распаковка установщика LibreOffice...")
+            target.mkdir(parents=True, exist_ok=True)
+            result = subprocess.run(
+                ["msiexec", "/a", str(msi), "/qn", f"TARGETDIR={target}"],
+                capture_output=True, text=True, timeout=900,
+            )
+            if result.returncode != 0:
+                logger.error(f"msiexec /a завершился с кодом {result.returncode}: {result.stderr or result.stdout}")
+            # Сам установщик и его копия, которую msiexec кладёт рядом с файлами, больше не нужны
+            msi.unlink(missing_ok=True)
+            for copy in target.glob("*.msi"):
+                copy.unlink(missing_ok=True)
+        shutil.rmtree(app_support / "resources", ignore_errors=True)
 
     def start_auto_install(self):
         """
