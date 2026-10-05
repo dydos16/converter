@@ -91,6 +91,8 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.asset }}
           if-no-files-found: error
+          # Сборки с main нужны ненадолго; релизы по тегам хранятся отдельно в Releases
+          retention-days: 7
 
       # Публикация в GitHub Release (приватный репозиторий поддерживается)
       - name: Publish to GitHub Release
