@@ -39,11 +39,12 @@ class BaseConverter(ABC):
         logger.error(error)
 
     def _require_text_layer(self, pdf_path: Path) -> bool:
-        """У скана нет текстового слоя: вместо пустого файла — понятная ошибка."""
+        """У скана нет текстового слоя — его текст распознаём (OCR). Ошибка, только если и распознать нечем."""
         import fitz
+        from .pdf_text import has_text, ocr_available
         with fitz.open(pdf_path) as doc:
-            if any(page.get_text().strip() for page in doc):
+            if ocr_available() or any(has_text(page) for page in doc):
                 return True
-        self._handle_error("В PDF нет текста — похоже, это скан. Распознавание текста (OCR) не поддерживается: "
-                           "сконвертируйте его в DOCX или картинки.")
+        self._handle_error("В PDF нет текста — похоже, это скан, а модели распознавания текста не найдены. "
+                           "Переустановите программу.")
         return False

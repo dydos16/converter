@@ -251,9 +251,8 @@ def check_pair(src: str, dst: str, files: dict[str, Path], out: Path, pages: int
     kind = sniff(out)
     if kind != want:
         return f"внутри {kind.upper()}, а не {want.upper()}"
-    # Текст должен доехать везде, кроме картинок и слайдов-картинок (PDF → pptx/ppt/odp)
-    if src in ("png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "heic", "heif") or want in IMAGE_FORMATS \
-            or (src == "pdf" and dst in ("pptx", "ppt", "odp")):
+    # Текст должен доехать везде, кроме картинок (в PDF → PPTX он теперь настоящий, редактируемый)
+    if src in ("png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "heic", "heif") or want in IMAGE_FORMATS:
         return None
     # Фраза целиком, со знаками: так ловится и испорченная кириллица, и разъехавшиеся запятые
     markers = ("яблоко", "Кол-во") if {src, dst} & {"xlsx", "xls", "csv"} else ("Привет, конвертер!",)
@@ -349,19 +348,23 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         return None if out.read_bytes().startswith(b"\xef\xbb\xbf") else "CSV без BOM — русский Excel покажет кракозябры"
 
     def scan_pdf() -> Path:
+        """Скан как со сканера: страница картинкой 200 DPI, текстового слоя нет."""
         import fitz
         src = d / "scan.pdf"
         if not src.exists():
             with fitz.open(files["pdf"]) as pdf:
-                png = pdf[0].get_pixmap(dpi=100).tobytes("png")
-            Image.open(io.BytesIO(png)).convert("RGB").save(src, "PDF")
+                png = pdf[0].get_pixmap(dpi=200).tobytes("png")
+            Image.open(io.BytesIO(png)).convert("RGB").save(src, "PDF", resolution=200)
         return src
 
     def scan_to_text():
-        ok, err = run(scan_pdf(), d / "scan.txt")
-        if ok:
-            return "скан превратился в пустой TXT без объяснений"
-        return None if err and "скан" in err[-1].lower() else f"непонятная ошибка: {err[-1] if err else '—'}"
+        out = d / "scan.txt"
+        ok, err = run(scan_pdf(), out)
+        if not ok:
+            return why(err)
+        flat = re.sub(r"\s+", " ", out.read_text(encoding="utf-8-sig"))
+        missing = [m for m in ("Привет, конвертер!", "яблоко", "Кол-во") if m not in flat]
+        return None if not missing else f"не распознано: {', '.join(missing)} (вышло: {flat[:120]}…)"
 
     def scan_to_docx():
         out = d / "scan.docx"
@@ -369,7 +372,25 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         if not ok:
             return why(err)
         from docx import Document
-        return None if Document(out).inline_shapes else "в DOCX нет страниц-картинок"
+        flat = re.sub(r"\s+", " ", " ".join(p.text for p in Document(out).paragraphs))
+        return None if "Привет, конвертер!" in flat else f"текст не распознан: {flat[:120]}…"
+
+    def pdf_to_pptx_editable():
+        out = d / "slides.pptx"
+        ok, err = run(files["pdf"], out)
+        if not ok:
+            return why(err)
+        from pptx import Presentation
+        slide = Presentation(out).slides[0]
+        texts = [s.text_frame.text for s in slide.shapes if s.has_text_frame]
+        pictures = [s for s in slide.shapes if s.shape_type == 13]          # 13 — картинка (фон страницы)
+        missing = [what for what, present in (
+            ("заголовок надписью", "Отчёт о продажах" in texts),
+            ("абзац надписью", any(TEXT in re.sub(r"\s+", " ", t) for t in texts)),
+            ("ячейки таблицы на своих местах", "Кол-во" in texts and "яблоко" in texts),
+            ("фон страницы", len(pictures) == 1),
+        ) if not present]
+        return None if not missing else "нет: " + ", ".join(missing)
 
     def pdf_to_docx_keeps_formatting():
         out = d / "formatted.docx"
@@ -447,8 +468,9 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         ("TXT из Блокнота (1251) → DOCX", windows_txt("docx")),
         ("TXT из Блокнота (1251) → PDF", windows_txt("pdf")),
         ("XLSX → CSV открывается в русском Excel (BOM)", csv_for_excel),
-        ("Скан PDF → TXT: понятная ошибка", scan_to_text),
-        ("Скан PDF → DOCX: страницы картинками", scan_to_docx),
+        ("Скан PDF → TXT: текст распознан (OCR), таблица тоже", scan_to_text),
+        ("Скан PDF → DOCX: текст распознан (OCR)", scan_to_docx),
+        ("PDF → PPTX: текст редактируемый, таблица по ячейкам", pdf_to_pptx_editable),
         ("PDF → DOCX сохраняет оформление", pdf_to_docx_keeps_formatting),
         ("PDF → PNG: страницы по порядку", page_order),
         ("PDF → TIFF сжат", tiff_compressed),

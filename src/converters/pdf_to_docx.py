@@ -5,7 +5,7 @@ PDF to DOCX через PyMuPDF: текст с оформлением (разме
 import io
 from pathlib import Path
 from .base import BaseConverter
-from .pdf_text import block_lines, line_pieces, page_text
+from .pdf_text import block_lines, has_text, line_pieces, ocr_lines, page_text
 from loguru import logger
 
 BOLD, ITALIC = 16, 2        # флаги шрифта в PyMuPDF
@@ -64,6 +64,16 @@ class PdfToDocxConverter(BaseConverter):
 
     def _add_page(self, doc, page):
         import fitz
+        from docx.shared import Pt
+
+        if not has_text(page):
+            # Скан: распознанный текст — абзацами; не распозналось — оставим страницу картинкой
+            lines = ocr_lines(page)
+            for _, pieces in lines:
+                for text, span in pieces:
+                    doc.add_paragraph().add_run(text).font.size = Pt(max(8, min(28, round(span["size"]))))
+            if lines:
+                return
 
         tables = [] if self.extract_text_only else page.find_tables().tables
         areas = [fitz.Rect(t.bbox) for t in tables]

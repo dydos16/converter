@@ -5,7 +5,8 @@
 ## Возможности
 
 - **Документы Office → PDF:** Word (docx, doc), PowerPoint (pptx, ppt, pps, ppsx), Excel и таблицы (xlsx, xls, csv), odt, rtf, txt.
-- **PDF → во что угодно:** Word, Excel, PowerPoint, изображения (png, jpg, webp, tiff…), текст, HTML, Markdown, JSON, XML; сжатие PDF.
+- **PDF → во что угодно:** Word (с оформлением, таблицами и картинками), Excel, PowerPoint (текст на слайдах можно править), изображения (png, jpg, webp, tiff…), текст, HTML, Markdown, JSON, XML; сжатие PDF.
+- **Сканы:** текст распознаётся сам (OCR, русский и английский), без интернета.
 - **Изображения:** png, jpg, webp, bmp, gif, tiff, HEIC с iPhone.
 - Пакетная конвертация, перетаскивание файлов в окно, отмена на ходу.
 - Светлая и тёмная темы (или как в системе), настройки сохраняются сами.
@@ -136,6 +137,7 @@ iscc /DAppVersion=1.1.0 packaging\windows\installer.iss
 | Qt / PySide6 | LGPL-3.0 |
 | PyMuPDF | AGPL-3.0 (или коммерческая лицензия Artifex) |
 | LibreOffice (скачивается отдельно) | MPL-2.0 |
+| Модели Tesseract tessdata_fast (rus, eng) для распознавания сканов | Apache-2.0 |
 | Pillow, pillow-heif, pdfplumber, pypdf, python-docx, python-pptx, openpyxl, reportlab, lxml, loguru | свободные (MIT, BSD, HPND и т. п.) |
 
 PyMuPDF распространяется под AGPL-3.0: при распространении приложения его исходный код должен быть доступен под совместимой лицензией, либо нужна коммерческая лицензия PyMuPDF.

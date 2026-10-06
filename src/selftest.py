@@ -70,6 +70,19 @@ def run_self_test(window, report: Path | None) -> int:
         except Exception:
             check(f"{src.upper()} → {dst.upper()}", False, traceback.format_exc(limit=3).strip().splitlines()[-1])
 
+    # Распознавание скана: модели Tesseract попали в сборку, а встроенный в PyMuPDF Tesseract работает
+    try:
+        import fitz
+        from src.converters.pdf_text import ocr_lines
+        with fitz.open() as text_pdf, fitz.open() as scan:
+            text_pdf.new_page().insert_text((72, 120), "Scanner check 2026", fontsize=28)
+            page = scan.new_page()
+            page.insert_image(page.rect, stream=text_pdf[0].get_pixmap(dpi=200).tobytes("png"))
+            found = " ".join(text for _, pieces in ocr_lines(page) for text, _ in pieces)
+        check("распознавание скана (OCR)", "Scanner check 2026" in found, found[:60])
+    except Exception as e:
+        check("распознавание скана (OCR)", False, repr(e))
+
     lines.append(f"Итог: {'ошибок нет' if not failed else f'не прошло проверок: {failed}'}")
     text = "\n".join(lines)
     if sys.stdout is not None:

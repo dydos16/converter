@@ -93,14 +93,15 @@ class PdfToSpreadsheetConverter(BaseConverter):
     def _extract_text_fallback(self, input_path: Path, output_path: Path) -> bool:
         """Запасной вариант — извлечение текста."""
         try:
-            import pdfplumber
+            import fitz
+            from .pdf_text import page_text
 
             self._update_status("Извлечение текста...")
 
             all_text = []
-            with pdfplumber.open(str(input_path)) as pdf:
-                for page_num, page in enumerate(pdf.pages):
-                    text = page.extract_text()
+            with fitz.open(str(input_path)) as pdf:
+                for page_num, page in enumerate(pdf):
+                    text = page_text(page)          # у скана — распознанный OCR
                     if text:
                         all_text.append(f"=== Page {page_num + 1} ===")
                         all_text.append(text)

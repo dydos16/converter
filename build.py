@@ -105,6 +105,8 @@ icon = PROJECT / "packaging" / ("icon.icns" if SYSTEM == "darwin" else "icon.ico
 if icon.exists():
     sys.argv += ["--icon", str(icon)]
 sys.argv += ["--add-data", f"{PROJECT / 'packaging' / 'icon.png'}{os.pathsep}packaging"]
+# Модели Tesseract (русский и английский) для распознавания сканов — сам Tesseract встроен в PyMuPDF
+sys.argv += ["--add-data", f"{PROJECT / 'packaging' / 'tessdata'}{os.pathsep}tessdata"]
 
 sys.argv.append("run.py")
 
