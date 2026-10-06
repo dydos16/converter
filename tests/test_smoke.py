@@ -106,7 +106,22 @@ def test_file_size_is_russian():
     assert [format_size(n) for n in (183, 4300, 12_500_000)] == ["183 Б", "4,2 КБ", "11,9 МБ"]
 
 
+def test_slow_libreoffice_start_is_not_unavailable():
+    """Первый запуск свежескачанного LibreOffice бывает дольше тайм-аута проверки (антивирус сканирует
+    файлы). Это не поломка: иначе Word → PDF не работает до перезапуска программы."""
+    import subprocess
+    from unittest import mock
+    from src.core.libreoffice_manager import LibreOfficeManager
+    lo = LibreOfficeManager()
+    lo._soffice_path = Path(sys.executable)                 # любой существующий файл
+    with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired("soffice", 10)), \
+         mock.patch("threading.Thread", lambda target, **kw: mock.Mock(start=target)):
+        lo._check_availability()
+    assert lo.is_available()
+
+
 if __name__ == "__main__":
+    test_slow_libreoffice_start_is_not_unavailable()
     test_libreoffice_archive_checksum()
     test_file_size_is_russian()
     test_missing_linux_libraries_are_recognised()

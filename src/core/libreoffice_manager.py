@@ -312,9 +312,12 @@ class LibreOfficeManager(QObject):
                     self.status_changed.emit("LibreOffice не установлен", False)
 
             except subprocess.TimeoutExpired:
-                logger.warning("Проверка LibreOffice таймаут (>10s)")
-                self._is_available = False
-                self.status_changed.emit("LibreOffice не отвечает (таймаут проверки)", False)
+                # soffice на месте и запустился, просто медленно: первый запуск свежескачанного LibreOffice
+                # бывает дольше 10 с (антивирус сканирует файлы). Не считаем это поломкой — иначе
+                # Word → PDF не работает до перезапуска программы
+                logger.warning("LibreOffice отвечает дольше 10 с — считаем доступным")
+                self._is_available = True
+                self.status_changed.emit("LibreOffice готов", True)
             except Exception as e:
                 logger.error(f"Ошибка при проверке LibreOffice: {e}")
                 self._is_available = False

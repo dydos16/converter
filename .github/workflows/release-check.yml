@@ -4,7 +4,8 @@ name: Release check
 #  • скачиваем файлы из Releases, ставим установщик / распаковываем zip / берём AppImage — самопроверка;
 #  • обычный запуск: приложение само докачивает LibreOffice и не падает;
 #  • этим LibreOffice конвертируем настоящий DOCX → PDF.
-# Системные библиотеки Qt на Linux нарочно не ставим: так всплывёт, если AppImage без них не запустится.
+# Системные библиотеки Qt на Linux нарочно не ставим (кроме libEGL — он есть на любом рабочем столе):
+# так всплывёт, если AppImage без них не запустится.
 on:
   workflow_dispatch:
     inputs:
@@ -89,16 +90,24 @@ jobs:
           chmod +x rel/FileConverterPro_Linux.AppImage
           ls -l rel
 
-      - name: Virtual screen only (no Qt libraries on purpose)
+      - name: Virtual screen and libEGL only (no Qt libraries on purpose)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
+          # libEGL — часть графического драйвера (Mesa): есть на любом рабочем столе Linux, но не на этом
+          # сервере. В AppImage его не кладут — он должен совпадать с драйвером системы
+          sudo apt-get install -y -qq xvfb libegl1
+
+      - name: System libraries the app still lacks here
+        run: |
+          unzip -q rel/FileConverterPro_Linux.zip -d unzipped
+          export LD_LIBRARY_PATH=$(find unzipped -name '*.so*' -printf '%h\n' | sort -u | paste -sd:)
+          missing=$(find unzipped -name '*.so*' -type f -exec ldd {} + 2>/dev/null | grep 'not found' | sort -u)
+          echo "${missing:-Все библиотеки на месте}"
 
       - name: AppImage and zip — self-test
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
         run: |
-          unzip -q rel/FileConverterPro_Linux.zip -d unzipped
           fail=0
           for app in rel/FileConverterPro_Linux.AppImage unzipped/FileConverterPro/FileConverterPro; do
             echo "=== $app"
