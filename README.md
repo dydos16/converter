@@ -52,7 +52,7 @@ chmod +x FileConverterPro_Linux.AppImage
 ./FileConverterPro_Linux.AppImage --appimage-extract-and-run
 ```
 
-Без AppImage: `FileConverterPro_Linux.zip` — распакуйте и запустите `FileConverterPro`. На Linux ARM (aarch64) готовой сборки нет — запускайте из исходников (см. ниже).
+Без AppImage: `FileConverterPro_Linux.zip` — распакуйте и запустите `FileConverterPro`. На системе без графики (сервер, минимальный контейнер, WSL) zip-версии нужен `libegl1` (`sudo apt install libegl1`); AppImage обходится без него. На Linux ARM (aarch64) готовой сборки нет — запускайте из исходников (см. ниже).
 
 ## LibreOffice: докачивается автоматически
 

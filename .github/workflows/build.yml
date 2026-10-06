@@ -181,9 +181,16 @@ jobs:
           Categories=Office;Utility;
           Terminal=false
           EOF
+          # libEGL — часть графического драйвера: Qt без него не стартует. AppImage берёт системный,
+          # а этот запасной (диспетчер glvnd, от драйвера не зависит) — только если в системе его нет
+          mkdir -p AppDir/usr/lib/fallback
+          cp -L /usr/lib/x86_64-linux-gnu/libEGL.so.1 /usr/lib/x86_64-linux-gnu/libGLdispatch.so.0 AppDir/usr/lib/fallback/
           cat > AppDir/AppRun <<'EOF'
           #!/bin/sh
           HERE="$(dirname "$(readlink -f "$0")")"
+          if ! PATH="$PATH:/sbin:/usr/sbin" ldconfig -p 2>/dev/null | grep -q 'libEGL\.so\.1 '; then
+            export LD_LIBRARY_PATH="$HERE/usr/lib/fallback${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
           exec "$HERE/usr/lib/fileconverterpro/FileConverterPro" "$@"
           EOF
           chmod +x AppDir/AppRun
@@ -198,6 +205,8 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
+          # Как на сервере без графики: в системе нет libEGL — AppImage должен взять свой запасной
+          sudo dpkg -r --force-depends libegl1 > /dev/null
           report="$RUNNER_TEMP/appimage-selftest.txt"
           set +e
           APPIMAGE_EXTRACT_AND_RUN=1 timeout 300 xvfb-run -a dist/FileConverterPro_Linux.AppImage --self-test="$report"
