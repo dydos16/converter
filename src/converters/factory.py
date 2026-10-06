@@ -89,8 +89,8 @@ class ConverterFactory:
     def _apply_converter_settings(cls, converter: BaseConverter, converter_class_name: str, kwargs: dict):
         """Применяет настройки к конвертеру"""
 
-        # Настройки для ImageConverter
-        if converter_class_name == 'ImageConverter':
+        # Настройки для ImageConverter и HeicConverter (он — тот же ImageConverter с открывалкой HEIC)
+        if converter_class_name in ('ImageConverter', 'HeicConverter'):
             if 'quality' in kwargs:
                 converter.set_quality(kwargs['quality'])
             if 'max_width' in kwargs or 'max_height' in kwargs:
@@ -129,10 +129,10 @@ class ConverterFactory:
             if 'optimize_images' in kwargs:
                 converter.set_optimize_images(kwargs['optimize_images'])
 
-        # Настройки для HeicConverter
-        elif converter_class_name == 'HeicConverter':
-            if 'quality' in kwargs:
-                converter.set_quality(kwargs['quality'])
+        # Настройки для PdfToSpreadsheetConverter
+        elif converter_class_name == 'PdfToSpreadsheetConverter':
+            if kwargs.get('table_strategy') in ('auto', 'lattice', 'stream'):
+                converter.table_strategy = kwargs['table_strategy']
 
     @classmethod
     def get_supported_conversions(cls) -> list[tuple[str, str]]:

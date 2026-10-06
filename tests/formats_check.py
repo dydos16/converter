@@ -509,6 +509,113 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         boxes = [s for s in Presentation(out).slides[0].shapes if s.has_text_frame]
         return None if not boxes else f"{len(boxes)} надписей легли мимо повёрнутой страницы"
 
+    def existing_file_kept():
+        from src.utils.helpers import get_unique_filename
+        out_dir = d / "Загрузки"
+        out_dir.mkdir()
+        mine = out_dir / "sample.pdf"
+        mine.write_bytes(b"%PDF-1.4 MY OWN FILE")       # у пользователя уже лежит файл с этим именем
+        target = get_unique_filename(out_dir / "sample.pdf")
+        ok, err = run(files["docx"], target)
+        if not ok:
+            return why(err)
+        if not mine.exists() or b"MY OWN FILE" not in mine.read_bytes():
+            return "файл пользователя с тем же именем затёрт"
+        return None if target.exists() and sniff(target) == "pdf" else "результата нет"
+
+    def same_names_in_parallel():
+        import threading
+        from docx import Document
+        from src.utils.helpers import get_unique_filename
+        out_dir, taken, jobs = d / "Итог", set(), []
+        out_dir.mkdir()
+        for dept in ("А", "Б", "В"):
+            src = d / f"отдел {dept}" / "отчёт.docx"     # три «отчёт.docx» из разных папок
+            src.parent.mkdir()
+            doc = Document()
+            doc.add_paragraph(f"Отчёт отдела {dept}")
+            doc.save(src)
+            target = get_unique_filename(out_dir / "отчёт.pdf", taken)
+            taken.add(target)
+            jobs.append((dept, src, target))
+        threads = [threading.Thread(target=run, args=(src, target)) for _, src, target in jobs]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        wrong = [f"{target.name}: ждали отдел {dept}" for dept, _, target in jobs
+                 if f"Отчёт отдела {dept}" not in (text_of(target, "pdf") if target.exists() else "")]
+        return None if not wrong else "; ".join(wrong)
+
+    def multipage_tiff():
+        pages = [Image.new("RGB", (200, 100), c) for c in ((200, 0, 0), (0, 200, 0), (0, 0, 200))]
+        pages[0].save(d / "fax.tiff", save_all=True, append_images=pages[1:])
+        ok, err = run(d / "fax.tiff", d / "fax.png")
+        if not ok:
+            return why(err)
+        with zipfile.ZipFile(d / "fax.zip") as z:
+            n = len(z.namelist())
+        return None if n == 3 else f"страниц в архиве: {n} из 3"
+
+    def animated_gif():
+        frames = [Image.new("RGB", (60, 60), (i * 80, 50, 50)) for i in range(3)]
+        frames[0].save(d / "anim.gif", save_all=True, append_images=frames[1:], duration=200, loop=0)
+        ok, err = run(d / "anim.gif", d / "anim.webp")
+        if not ok:
+            return why(err)
+        n = getattr(Image.open(d / "anim.webp"), "n_frames", 1)
+        return None if n == 3 else f"кадров: {n} из 3"
+
+    def panorama():
+        src = d / "pano.png"
+        Image.new("L", (13500, 13500), 200).save(src)   # 182 Мпикс — больше порога Pillow
+        ok, err = run(src, d / "pano.jpg")
+        return None if ok else why(err)
+
+    def sheets_to_csv():
+        from openpyxl import Workbook
+        wb = Workbook()
+        wb.active.title = "Январь"
+        wb.active.append(["январь", 1])
+        wb.create_sheet("Февраль").append(["февраль", 2])
+        wb.create_sheet("Пустой")
+        wb.save(d / "months.xlsx")
+        ok, err = run(d / "months.xlsx", d / "months.csv")
+        if not ok:
+            return why(err)
+        made = sorted(p.name for p in d.glob("months*.csv"))
+        return None if made == ["months - Февраль.csv", "months.csv"] else f"файлы: {made}"
+
+    def image_max_size():
+        too_big = []
+        for src, dst in (("png", "jpg"), ("heic", "png")):
+            out = d / f"small_{src}.{dst}"
+            ok, err = run(files[src], out, max_width=100, max_height=None)
+            if not ok:
+                return why(err)
+            if Image.open(out).width > 100:
+                too_big.append(f"{src} → {dst}: {Image.open(out).width} px")
+        return None if not too_big else "не уменьшено: " + ", ".join(too_big)
+
+    def borderless_table():
+        from docx import Document
+        src_docx = d / "borderless.docx"
+        doc = Document()
+        table = doc.add_table(rows=len(TABLE), cols=len(TABLE[0]))   # без стиля — без рамок
+        for r, row in enumerate(TABLE):
+            for c, value in enumerate(row):
+                table.cell(r, c).text = value
+        doc.save(src_docx)
+        pdf = lo_convert(soffice, profile, src_docx, "pdf", d)
+        out = d / "borderless.xlsx"
+        ok, err = run(pdf, out, table_strategy="stream")
+        if not ok:
+            return why(err)
+        from openpyxl import load_workbook
+        rows = [[v for v in row if v not in (None, "")] for row in load_workbook(out).active.iter_rows(values_only=True)]
+        hit = next((row for row in rows if "яблоко" in row), None)
+        return None if hit and len(hit) >= 3 else f"строка с «яблоко» не разбита по столбцам: {hit}"
+
     def tiff_compressed():
         ok, err = run(files["pdf"], d / "page.tiff")
         if not ok:
@@ -540,6 +647,14 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         ("Сжатие PDF со сканом уменьшает файл", compress_scan),
         ("PDF в две колонки → DOCX: сначала левая, потом правая", two_columns_to_docx),
         ("Повёрнутая страница → PPTX: без надписей мимо", rotated_to_pptx),
+        ("Файл пользователя с тем же именем не затирается", existing_file_kept),
+        ("Три «отчёт.docx» одновременно → три правильных PDF", same_names_in_parallel),
+        ("Многостраничный TIFF → PNG: все страницы", multipage_tiff),
+        ("Анимированный GIF → WEBP: анимация сохранена", animated_gif),
+        ("Панорама 182 Мпикс → JPG", panorama),
+        ("XLSX с несколькими листами → CSV на каждый лист", sheets_to_csv),
+        ("«Макс. ширина» уменьшает картинку (и HEIC)", image_max_size),
+        ("Таблица без рамок → XLSX (режим stream)", borderless_table),
     ]
 
 

@@ -120,7 +120,32 @@ def test_slow_libreoffice_start_is_not_unavailable():
     assert lo.is_available()
 
 
+def test_interrupted_libreoffice_install_is_not_used():
+    """Программу закрыли посреди распаковки LibreOffice: недоделанный не считается установленным,
+    а перед новой установкой его остатки убираются (профиль — оставляем)."""
+    import platform
+    import tempfile
+    from unittest import mock
+    from src.core.libreoffice_manager import INSTALLING, LibreOfficeManager
+    root = Path(tempfile.mkdtemp())
+    soffice = {"Darwin": root / "LibreOffice.app" / "Contents" / "MacOS" / "soffice",
+               "Windows": root / "windows" / "LibreOffice" / "program" / "soffice.exe"}.get(
+        platform.system(), root / "linux" / "opt" / "libreoffice26.2" / "program" / "soffice")
+    soffice.parent.mkdir(parents=True)
+    soffice.write_text("#!/bin/sh\n")
+    soffice.chmod(0o755)                                        # _find_soffice берёт только исполняемый
+    (root / "profile").mkdir()
+    with mock.patch.object(LibreOfficeManager, "get_app_support_dir", staticmethod(lambda: root)):
+        lo = LibreOfficeManager()
+        assert lo._find_soffice() == soffice                    # распаковано до конца — берём
+        (root / INSTALLING).write_text("x")
+        assert lo._find_soffice() != soffice                    # распаковку прервали — не берём
+        LibreOfficeManager._remove_partial_install(root)
+    assert [p.name for p in root.iterdir()] == ["profile"]
+
+
 if __name__ == "__main__":
+    test_interrupted_libreoffice_install_is_not_used()
     test_slow_libreoffice_start_is_not_unavailable()
     test_libreoffice_archive_checksum()
     test_file_size_is_russian()

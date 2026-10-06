@@ -2,6 +2,7 @@
 Управление настройками приложения
 """
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 from loguru import logger
@@ -65,8 +66,11 @@ class Settings:
         """Сохраняет настройки в файл"""
         try:
             self.config_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            # Сначала во временный файл, потом подмена: сбой посреди записи не оставит обрезанный JSON
+            tmp = self.config_path.with_suffix('.tmp')
+            with open(tmp, 'w', encoding='utf-8') as f:
                 json.dump(self.settings, f, indent=2, ensure_ascii=False)
+            os.replace(tmp, self.config_path)
             logger.info(f"Настройки сохранены в {self.config_path}")
         except Exception as e:
             logger.error(f"Не удалось сохранить настройки: {e}")

@@ -98,7 +98,9 @@ class PdfToImageConverter(BaseConverter):
 
                 # Несколько страниц — архив. Рисуем и пишем по одной: 100 страниц при 200 DPI
                 # заняли бы в памяти больше гигабайта
-                zip_path = output_path.with_suffix('.zip')
+                # Свободное имя: лежащий в папке «отчёт.zip» не затираем
+                from src.utils.helpers import get_unique_filename
+                zip_path = get_unique_filename(output_path.with_suffix('.zip'))
                 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as archive:
                     for i, page_num in enumerate(pages):
                         self._update_progress(10 + int(i / len(pages) * 90))

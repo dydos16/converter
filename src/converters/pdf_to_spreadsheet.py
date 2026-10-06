@@ -10,6 +10,10 @@ from loguru import logger
 class PdfToSpreadsheetConverter(BaseConverter):
     """Конвертер PDF в таблицы через pdfplumber (без pandas)."""
 
+    def __init__(self):
+        super().__init__()
+        self.table_strategy = 'auto'        # «Извлечение таблиц» в настройках: auto, lattice, stream
+
     def get_input_formats(self):
         return ['pdf']
 
@@ -41,7 +45,10 @@ class PdfToSpreadsheetConverter(BaseConverter):
                     for page_num, page in enumerate(pdf.pages):
                         self._update_progress(30 + int((page_num / max(total_pages, 1)) * 50))
 
-                        tables = page.extract_tables()
+                        # lattice/auto — таблицы по линиям рамки; stream — без рамок, по выравниванию текста
+                        tables = page.extract_tables(
+                            {"vertical_strategy": "text", "horizontal_strategy": "text"}
+                            if self.table_strategy == 'stream' else None)
                         if tables:
                             for table in tables:
                                 if table and len(table) > 1:

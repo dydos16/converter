@@ -145,11 +145,12 @@ def ensure_output_directory(output_path: Path) -> bool:
         return False
 
 
-def get_unique_filename(path: Path) -> Path:
+def get_unique_filename(path: Path, taken=()) -> Path:
     """
-    Возвращает уникальное имя файла, если файл уже существует
+    Свободное имя: файла нет на диске, и оно не выдано другой задаче этой же очереди (taken) —
+    два «отчёт.docx» из разных папок иначе получили бы один «отчёт.pdf»
     """
-    if not path.exists():
+    if not path.exists() and path not in taken:
         return path
 
     counter = 1
@@ -158,7 +159,7 @@ def get_unique_filename(path: Path) -> Path:
 
     while True:
         new_path = path.parent / f"{stem} ({counter}){suffix}"
-        if not new_path.exists():
+        if not new_path.exists() and new_path not in taken:
             return new_path
         counter += 1
 

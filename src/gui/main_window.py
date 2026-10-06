@@ -804,6 +804,7 @@ class MainWindow(QMainWindow):
 
         added_count = 0
         self._batch = []
+        taken: set[Path] = set()            # имена, уже выданные задачам этой очереди
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
             input_path = Path(item.data(Qt.ItemDataRole.UserRole))
@@ -817,8 +818,8 @@ class MainWindow(QMainWindow):
             else:
                 output_name = f"converted_{added_count+1}.{output_format}"
 
-            output_path = Path(output_dir) / output_name
-            output_path = get_unique_filename(output_path)
+            output_path = get_unique_filename(Path(output_dir) / output_name, taken)
+            taken.add(output_path)
 
             ensure_output_directory(output_path)
 
@@ -828,6 +829,10 @@ class MainWindow(QMainWindow):
             # Настройки для изображений
             if output_format in ['jpg', 'jpeg', 'webp']:
                 kwargs['quality'] = self.settings.get('image_quality', 85)
+            if input_format in ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'gif', 'tiff', 'heic', 'heif']:
+                # «Макс. ширина/высота» из настроек (0 — не уменьшать)
+                kwargs['max_width'] = self.settings.get('image_max_width') or None
+                kwargs['max_height'] = self.settings.get('image_max_height') or None
 
             # Настройки для PDF
             if input_format == 'pdf':

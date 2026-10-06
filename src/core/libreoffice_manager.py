@@ -87,7 +87,8 @@ def unpack_deb(deb: Path, dest: Path) -> None:
     raise ValueError(f"{deb.name}: нет data.tar")
 
 
-LO_MISSING = "Для этой конвертации нужен LibreOffice — приложение скачивает его само, попробуйте чуть позже."
+INSTALLING = ".installing"      # метка незавершённой распаковки LibreOffice
+LO_MISSING ="Для этой конвертации нужен LibreOffice — приложение скачивает его само, попробуйте чуть позже."
 
 
 class LibreOfficeManager(QObject):
@@ -144,9 +145,12 @@ class LibreOfficeManager(QObject):
         system = platform.system()
         possible_paths = []
 
-        # 1. Каталог App Support (встроенный / самодостаточный LibreOffice)
+        # 1. Каталог App Support (встроенный / самодостаточный LibreOffice).
+        # Метка .installing — распаковку прервали (закрыли программу): недоделанный LibreOffice не берём
         app_support = self.get_app_support_dir()
-        if system == "Darwin":  # macOS
+        if (app_support / INSTALLING).exists():
+            pass
+        elif system == "Darwin":  # macOS
             possible_paths.extend(app / "Contents" / "MacOS" / "soffice" for app in self._bundled_mac_apps())
         elif system == "Windows":
             # Административная распаковка MSI кладёт программу на 1–3 уровня глубже (например, PFiles\LibreOffice)
@@ -235,7 +239,7 @@ class LibreOfficeManager(QObject):
         # as_uri() корректно кодирует пробелы (например в "Application Support") -> %20
         return profile.as_uri()
 
-    def _get_optimized_cmd(self, input_path: Path, output_path: Path, infilter: Optional[str] = None) -> list:
+    def _get_optimized_cmd(self, input_path: Path, output_path: Path, infilter: Optional[str], outdir: Path) -> list:
         """
         Возвращает оптимизированную команду LibreOffice для конвертации в формат по расширению output_path.
         Использует изолированный пользовательский профиль и параметры, ускоряющие
@@ -263,7 +267,7 @@ class LibreOfficeManager(QObject):
         target = output_path.suffix.lstrip('.').lower()
         cmd.extend([
             '--convert-to', 'txt:Text (encoded):UTF8' if target == 'txt' else target,
-            '--outdir', str(output_path.parent),
+            '--outdir', str(outdir),
             str(input_path)
         ])
 
@@ -410,6 +414,18 @@ class LibreOfficeManager(QObject):
             logger.error(f"Ошибка скачивания LibreOffice: {e}")
             return False
 
+    @staticmethod
+    def _remove_partial_install(app_support: Path) -> None:
+        """Убирает остатки прерванной установки; профиль LibreOffice (настройки) оставляем."""
+        logger.warning("Прошлая установка LibreOffice прервалась — ставим заново")
+        for child in app_support.iterdir():
+            if child.name == "profile":
+                continue
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+
     def _extract_libreoffice(self, archive_path: Path) -> None:
         """Распаковывает архив LibreOffice в App Support."""
         app_support = self.get_app_support_dir()
@@ -498,6 +514,8 @@ class LibreOfficeManager(QObject):
 
             app_support = self.get_app_support_dir()
             app_support.mkdir(parents=True, exist_ok=True)
+            if (app_support / INSTALLING).exists():
+                self._remove_partial_install(app_support)
 
             url = self._libreoffice_archive_url()
             ext = url.split('.')[-1]
@@ -517,7 +535,12 @@ class LibreOfficeManager(QObject):
                                                   "Попробуйте ещё раз позже.")
                 return
 
+            # Метка на время распаковки: если программу закроют посередине, при следующем запуске
+            # недораспакованный LibreOffice не примем за установленный, а поставим заново
+            marker = app_support / INSTALLING
+            marker.write_text("распаковка LibreOffice не завершена", encoding="utf-8")
             self._extract_libreoffice(archive_path)
+            marker.unlink(missing_ok=True)
 
             # Проверяем результат
             soffice = self._find_soffice()
@@ -590,34 +613,35 @@ class LibreOfficeManager(QObject):
             return False
 
         try:
-            cmd = self._get_optimized_cmd(input_path, output_path, infilter)
-            logger.info(f"Запуск оптимизированной конвертации: {' '.join(cmd)}")
+            # LibreOffice пишет «<имя исходного>.<формат>» в outdir. В папке пользователя это затирало его файл
+            # с таким именем (а результат потом переименовывался — и прежний файл пропадал), а одновременные
+            # задачи с одинаковыми именами — друг друга. Поэтому outdir — своя временная папка
+            with tempfile.TemporaryDirectory(prefix="fcp_lo_") as workdir:
+                cmd = self._get_optimized_cmd(input_path, output_path, infilter, Path(workdir))
+                logger.info(f"Запуск оптимизированной конвертации: {' '.join(cmd)}")
 
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                stdin=subprocess.DEVNULL,
-            )
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    stdin=subprocess.DEVNULL,
+                )
 
-            if result.returncode != 0:
-                logger.error(f"LibreOffice ошибка: {result.stderr}")
-                self._report_missing_libraries(result.stderr)
-                return False
+                if result.returncode != 0:
+                    logger.error(f"LibreOffice ошибка: {result.stderr}")
+                    self._report_missing_libraries(result.stderr)
+                    return False
 
-            # LibreOffice кладёт в outdir файл с именем исходного и новым расширением
-            made = output_path.parent / f"{input_path.stem}.{output_path.suffix.lstrip('.').lower()}"
-            if made.exists():
-                if made != output_path:
-                    made.replace(output_path)
+                made = Path(workdir) / f"{input_path.stem}.{output_path.suffix.lstrip('.').lower()}"
+                if not made.exists():
+                    logger.error(f"LibreOffice не создал {made.name}")
+                    return False
+                shutil.copyfile(made, output_path)
                 logger.info(f"Конвертация успешна: {output_path}")
                 if progress_callback:
                     progress_callback(100)
                 return True
-            else:
-                logger.error(f"LibreOffice не создал {made}")
-                return False
 
         except subprocess.TimeoutExpired:
             logger.error("Превышено время конвертации LibreOffice (>300s)")

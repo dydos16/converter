@@ -90,15 +90,24 @@ def main() -> int:
             path = tmp / f"img_{i}.png"
             Image.new("RGB", (64, 64), (i * 80, 120, 200)).save(path)
             src.append(path)
+        other = tmp / "другая папка"                    # тот же «img_0.png» из другой папки
+        other.mkdir()
+        Image.new("RGB", (64, 64), (250, 20, 20)).save(other / "img_0.png")
+        src.append(other / "img_0.png")
         out = tmp / "out"
         out.mkdir()
         QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(out))
+        w.settings.settings['image_max_width'] = 32     # «Макс. ширина» в настройках
         w.add_paths(src)
         w.output_format_combo.setCurrentText("jpg")
         w.start_conversion()
-        done = wait(app, 60, lambda: all(w.file_list.item(i).data(PROGRESS_ROLE) in (100, -1) for i in range(3)))
+        done = wait(app, 60, lambda: all(w.file_list.item(i).data(PROGRESS_ROLE) in (100, -1)
+                                         for i in range(w.file_list.count())))
         made = sorted(p.name for p in out.iterdir())
-        check("PNG → JPG через интерфейс", done and made == ["img_0.jpg", "img_1.jpg", "img_2.jpg"], str(made))
+        check("PNG → JPG через интерфейс, одинаковые имена не затирают друг друга",
+              done and made == ["img_0 (1).jpg", "img_0.jpg", "img_1.jpg", "img_2.jpg"], str(made))
+        widths = {Image.open(out / name).width for name in made}
+        check("«Макс. ширина» из настроек применяется", widths == {32}, str(widths))
 
         if shots:
             wait(app, 1.0)

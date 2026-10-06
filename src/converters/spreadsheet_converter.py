@@ -78,11 +78,21 @@ class SpreadsheetConverter(BaseConverter):
     def _xlsx_to_csv(self, input_path: Path, output_path: Path) -> bool:
         from openpyxl import load_workbook
 
+        from src.utils.helpers import get_unique_filename
+
         self._update_status("Сохранение в CSV...")
         wb = load_workbook(input_path, read_only=True, data_only=True)
-        # С BOM: без него русский Excel откроет UTF-8 кракозябрами
-        with open(output_path, 'w', encoding='utf-8-sig', newline='') as f:
-            csv.writer(f).writerows(wb.active.iter_rows(values_only=True))
+        # CSV — это один лист. Первый — в выбранный файл, остальные — рядом: «отчёт - Февраль.csv».
+        # Пустые листы («Лист2», «Лист3» из старых шаблонов) пропускаем
+        sheets = [ws for ws in wb.worksheets
+                  if any(v is not None for row in ws.iter_rows(values_only=True) for v in row)]
+        for n, ws in enumerate(sheets or wb.worksheets[:1]):
+            title = re.sub(r'[<>:"/\\|?*]', '_', ws.title)        # недопустимое в именах файлов Windows
+            target = output_path if n == 0 else \
+                get_unique_filename(output_path.with_name(f"{output_path.stem} - {title}.csv"))
+            # С BOM: без него русский Excel откроет UTF-8 кракозябрами
+            with open(target, 'w', encoding='utf-8-sig', newline='') as f:
+                csv.writer(f).writerows(ws.iter_rows(values_only=True))
         wb.close()
         self._update_progress(100)
         return True
