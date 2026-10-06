@@ -98,6 +98,7 @@ def main() -> int:
         out.mkdir()
         QFileDialog.getExistingDirectory = staticmethod(lambda *a, **k: str(out))
         w.settings.settings['image_max_width'] = 32     # «Макс. ширина» в настройках
+        w.input_format_combo.setCurrentText("pdf")      # формат, оставшийся с прошлого сеанса
         w.add_paths(src)
         w.output_format_combo.setCurrentText("jpg")
         w.start_conversion()

@@ -12,6 +12,9 @@ from .base import BaseConverter
 from loguru import logger
 
 
+EXCEL_MAX_ROWS = 1_048_576          # больше строк в лист Excel не помещается
+
+
 def _cell(value: str):
     """Числа из CSV — числами, иначе Excel покажет их текстом. Коды с ведущим нулём и длинные номера не трогаем."""
     if re.fullmatch(r"-?(0|[1-9]\d{0,14})", value):
@@ -71,9 +74,15 @@ class SpreadsheetConverter(BaseConverter):
             dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t")
         except csv.Error:                                   # один столбец — разделителя нет
             dialect = csv.excel
-        wb = Workbook()
-        for row in csv.reader(io.StringIO(text), dialect):
-            wb.active.append([_cell(value) for value in row])
+        # Потоковая запись: обычный режим держит в памяти всю таблицу (200 тыс. строк — +380 МБ)
+        wb = Workbook(write_only=True)
+        ws = wb.create_sheet()
+        for n, row in enumerate(csv.reader(io.StringIO(text), dialect), 1):
+            if n > EXCEL_MAX_ROWS:
+                self._handle_error(f"В CSV больше {EXCEL_MAX_ROWS:,} строк — столько не помещается в лист Excel."
+                                   .replace(",", " "))
+                return False
+            ws.append([_cell(value) for value in row])
         wb.save(output_path)
         self._update_progress(100)
         return True

@@ -682,7 +682,9 @@ class MainWindow(QMainWindow):
         self.file_list.addItem(item)
 
         current_format = self.input_format_combo.currentText()
-        if current_format == 'Все' or not current_format:
+        # «Из» — по добавленному файлу, если выбран «Все» или в списке нет ни одного файла выбранного формата:
+        # формат восстанавливается из прошлого сеанса, и перетащенные PNG иначе «не подходят по формату»
+        if ext != current_format and (current_format in ('Все', '') or not self._has_files_of(current_format)):
             detected_format = self.detect_file_format(file_path)
             if detected_format in ConverterFactory.get_input_formats():
                 index = self.input_format_combo.findText(detected_format)
@@ -693,6 +695,10 @@ class MainWindow(QMainWindow):
             self.check_file_formats()
             self.update_convert_button()
             self.update_file_count()
+
+    def _has_files_of(self, fmt: str) -> bool:
+        return any(Path(self.file_list.item(i).data(Qt.ItemDataRole.UserRole)).suffix.lower().lstrip('.') == fmt
+                   for i in range(self.file_list.count()))
 
     def clear_files(self):
         """Очищает список файлов"""

@@ -549,9 +549,11 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         for message in logs:
             if "код 81" in message:
                 print(f"   (LibreOffice: {message})", flush=True)
-        wrong = [f"{target.name}: ждали отдел {dept}" + ("" if target.exists() else " — файла нет")
-                 for dept, _, target in jobs
-                 if f"Отчёт отдела {dept}" not in (text_of(target, "pdf") if target.exists() else "")]
+        def inside(target: Path) -> str:
+            return re.sub(r"\s+", " ", text_of(target, "pdf") or "")[:50] if target.exists() else "файла нет"
+
+        wrong = [f"{target.name}: ждали отдел {dept}, внутри «{inside(target)}» ({target.stat().st_size if target.exists() else 0} Б)"
+                 for dept, _, target in jobs if f"Отчёт отдела {dept}" not in inside(target)]
         if not wrong:
             return None
         return "; ".join(wrong) + f" | итоги задач: {results} | журнал: {' / '.join(logs)[-700:]}"
