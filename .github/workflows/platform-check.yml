@@ -144,8 +144,14 @@ jobs:
           # Ждём экран и оконный менеджер по-настоящему, а не «sleep 2»: на медленной машине Xvfb встаёт
           # секунды, и окно, показанное до openbox, он потом сдвигает — клики проверки промахиваются
           timeout 60 bash -c 'until xdpyinfo >/dev/null 2>&1; do sleep 0.2; done'
-          openbox &
-          timeout 60 bash -c 'until xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; do sleep 0.2; done'
+          # openbox изредка не подключается к только что вставшему Xvfb («Failed to open the display») и выходит —
+          # тогда запускаем снова, а не ждём минуту впустую
+          for attempt in 1 2 3; do
+            openbox &
+            timeout 20 bash -c 'until xprop -root _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -q "window id"; do sleep 0.2; done' && break
+            echo "openbox не поднялся (попытка $attempt)"
+          done
+          xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"
           python tests/ui_check.py screenshots
 
       - name: Upload screenshots
