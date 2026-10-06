@@ -363,7 +363,21 @@ def test_utf16_text_and_csv_are_read():
     assert list(load_workbook(d / "excel.xlsx").active.iter_rows(values_only=True))[1] == ("яблоко", 10)
 
 
+def test_russian_csv_without_header():
+    """Выгрузка из банка или 1С — одни строки данных, «;» между ячейками и «,» в дробях:
+    Sniffer выбирал «,» и резал «99,50» пополам."""
+    import tempfile
+    from openpyxl import load_workbook
+    from src.converters.spreadsheet_converter import SpreadsheetConverter
+    d = Path(tempfile.mkdtemp())
+    (d / "выписка.csv").write_bytes("яблоко;99,50;1,25\r\nгруша;120,00;0,75\r\n".encode("cp1251"))
+    assert SpreadsheetConverter().convert(d / "выписка.csv", d / "выписка.xlsx")
+    rows = list(load_workbook(d / "выписка.xlsx").active.iter_rows(values_only=True))
+    assert rows == [("яблоко", 99.5, 1.25), ("груша", 120, 0.75)], rows
+
+
 if __name__ == "__main__":
+    test_russian_csv_without_header()
     test_utf16_text_and_csv_are_read()
     test_pdf_text_is_escaped_in_html()
     test_libreoffice_failure_is_explained()

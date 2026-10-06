@@ -105,10 +105,17 @@ class SpreadsheetConverter(BaseConverter):
             dialect = csv.Sniffer().sniff(text[:8192], delimiters=",;\t")
         except csv.Error:                                   # один столбец — разделителя нет
             dialect = csv.excel
+        # Русский Excel: «;» между ячейками и «,» в дробях. Без строки заголовков Sniffer при равенстве выбирает «,»
+        # и режет «99,50» пополам. «;» или табуляция одинаково в каждой строке — это и есть разделитель
+        head = text[:65536].splitlines()[:200]
+        lines = [line for line in (head[:-1] if len(text) > 65536 else head) if line.strip()]
+        delimiter = next((d for d in (";", "\t")
+                          if lines and d in lines[0] and len({line.count(d) for line in lines}) == 1),
+                         dialect.delimiter)
         # Потоковая запись: обычный режим держит в памяти всю таблицу (200 тыс. строк — +380 МБ)
         wb = Workbook(write_only=True)
         ws = wb.create_sheet()
-        for n, row in enumerate(csv.reader(io.StringIO(text), dialect), 1):
+        for n, row in enumerate(csv.reader(io.StringIO(text), dialect, delimiter=delimiter), 1):
             if n > EXCEL_MAX_ROWS:
                 self._handle_error(f"В CSV больше {EXCEL_MAX_ROWS:,} строк — столько не помещается в лист Excel."
                                    .replace(",", " "))
