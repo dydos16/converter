@@ -127,9 +127,9 @@ def main() -> int:
         w.input_format_combo.setCurrentText("Все")
         for name in ("фото.jpeg", "снимок.JPG"):
             Image.new("RGB", (8, 8)).save(tmp / name, "JPEG")
-        w.add_paths([tmp / "фото.jpeg", tmp / "снимок.JPG"])
-        check(".jpeg и .jpg конвертируются вместе", w.input_format_combo.currentText() == "jpg"
-              and w.convert_btn.isEnabled(), w.input_format_combo.currentText())
+        w.add_paths([tmp / "фото.jpeg", tmp / "снимок.JPG", src[1]])     # и посторонний PNG — он не мешает
+        check(".jpeg и .jpg конвертируются вместе, посторонний файл не гасит кнопку",
+              w.input_format_combo.currentText() == "jpg" and w.convert_btn.isEnabled(), w.input_format_combo.currentText())
 
         if shots:
             wait(app, 1.0)

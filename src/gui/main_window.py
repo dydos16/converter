@@ -594,22 +594,12 @@ class MainWindow(QMainWindow):
         self.convert_btn.setText("Конвертировать")
         self.convert_btn.setProperty("danger", False)
 
-        has_files = self.file_list.count() > 0
         has_format = self.input_format_combo.currentText() != 'Все' and self.input_format_combo.currentText()
         has_output = bool(self.output_format_combo.currentText())
 
-        valid_files = True
-        if has_files and has_format:
-            input_format = self.input_format_combo.currentText()
-            for i in range(self.file_list.count()):
-                item = self.file_list.item(i)
-                file_path = Path(item.data(Qt.ItemDataRole.UserRole))
-                ext = format_of(file_path)
-                if ext != input_format:
-                    valid_files = False
-                    break
-
-        enabled = has_files and has_format and has_output and valid_files
+        # Хватит одного подходящего файла: остальные (красные) start_conversion пропустит, а строка состояния
+        # говорит «подходят по формату: N». Иначе один посторонний файл молча гасил кнопку
+        enabled = bool(has_format and has_output and self._has_files_of(self.input_format_combo.currentText()))
         self.convert_btn.setEnabled(enabled)
 
     def add_files(self):
