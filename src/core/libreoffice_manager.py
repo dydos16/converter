@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 from loguru import logger
-from PySide6.QtCore import QObject, QTimer, QThread, Signal
+from PySide6.QtCore import QLockFile, QObject, QTimer, QThread, Signal
 
 
 # Пакеты, которых обычно нет только на серверах и в минимальных контейнерах
@@ -514,6 +514,13 @@ class LibreOfficeManager(QObject):
 
             app_support = self.get_app_support_dir()
             app_support.mkdir(parents=True, exist_ok=True)
+            # Программу запустили дважды: ставит одна копия, иначе вторая приняла бы распаковку первой
+            # за прерванную и стёрла её. QLockFile сам снимает блокировку упавшего процесса
+            lock = QLockFile(str(app_support / "install.lock"))
+            if not lock.tryLock(0):
+                logger.info("LibreOffice уже ставит другая копия программы")
+                self.install_finished.emit(False, "LibreOffice устанавливается в другом окне программы — подождите")
+                return
             if (app_support / INSTALLING).exists():
                 self._remove_partial_install(app_support)
 
@@ -556,6 +563,9 @@ class LibreOfficeManager(QObject):
         except Exception as e:
             logger.exception(f"Ошибка установки LibreOffice: {e}")
             self.install_finished.emit(False, f"Ошибка установки LibreOffice: {e}")
+        finally:
+            if 'lock' in locals() and lock.isLocked():
+                lock.unlock()
 
     def _on_install_thread_finished(self):
         """Обработчик завершения потока установки."""
@@ -574,11 +584,13 @@ class LibreOfficeManager(QObject):
         вызван вне GUI, где не запускается start_periodic_check), выполняет
         синхронную проверку наличия soffice.
         """
-        if not self._check_attempted:
+        if not self._check_attempted or (not self._is_available and not self._is_checking):
+            # Не нашли раньше — ищем снова (это дёшево: проверка файлов): LibreOffice могла доставить
+            # вторая копия программы или пользователь сам, не перезапуская её
             self._check_attempted = True
-            self._soffice_path = self._find_soffice()
-            if self._soffice_path:
-                self._is_available = True
+            found = self._find_soffice()
+            if found:
+                self._soffice_path, self._is_available = found, True
         return self._is_available
 
     def get_soffice_path(self) -> Optional[Path]:

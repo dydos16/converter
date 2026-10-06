@@ -171,7 +171,31 @@ def test_read_only_folder_is_detected():
             os.chmod(folder, stat.S_IRWXU)
 
 
+def test_second_app_copy_does_not_wipe_libreoffice_install():
+    """Программу запустили дважды: пока первая копия ставит LibreOffice (держит install.lock),
+    вторая не трогает папку — иначе стёрла бы распаковку первой как «прерванную»."""
+    import tempfile
+    from unittest import mock
+    from PySide6.QtCore import QLockFile
+    from src.core.libreoffice_manager import INSTALLING, LibreOfficeManager
+    root = Path(tempfile.mkdtemp())
+    (root / INSTALLING).write_text("x")                     # первая копия распаковывает
+    (root / "LibreOffice.app").mkdir()
+    first = QLockFile(str(root / "install.lock"))
+    assert first.tryLock(0)
+    lo = LibreOfficeManager()       # создаём до подмен: Shiboken падает, если класс с сигналами менять раньше
+    try:
+        with mock.patch.object(LibreOfficeManager, "get_app_support_dir", staticmethod(lambda: root)), \
+             mock.patch.object(lo, "_libreoffice_archive_url") as url:
+            lo._do_install_blocking()
+        assert not url.called                               # не начала скачивать
+        assert (root / "LibreOffice.app").exists()          # и ничего не стёрла
+    finally:
+        first.unlock()
+
+
 if __name__ == "__main__":
+    test_second_app_copy_does_not_wipe_libreoffice_install()
     test_read_only_folder_is_detected()
     test_dropped_folder_skips_service_files()
     test_interrupted_libreoffice_install_is_not_used()
