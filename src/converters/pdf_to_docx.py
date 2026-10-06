@@ -49,6 +49,10 @@ class PdfToDocxConverter(BaseConverter):
         self.extract_text_only = text_only
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        # doc/odt/rtf писать сами не умеем: делаем DOCX и пересохраняем через LibreOffice
+        if output_path.suffix.lower() != '.docx':
+            from src.core.libreoffice_manager import LibreOfficeManager
+            return LibreOfficeManager().convert_via(lambda docx: self.convert(input_path, docx), output_path, '.docx')
         try:
             self._update_status("Подготовка к конвертации PDF в DOCX...")
             self._update_progress(10)

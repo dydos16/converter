@@ -123,6 +123,7 @@ iscc /DAppVersion=1.1.0 packaging\windows\installer.iss
 ```bash
 .venv/bin/python tests/test_smoke.py          # быстрые проверки
 .venv/bin/python tests/integration_check.py   # окно, конвертации, LibreOffice, DOCX → PDF
+.venv/bin/python tests/formats_check.py       # все пары форматов: внутри нужный формат, текст на месте
 .venv/bin/python tests/ui_check.py            # настоящая мышь на экране (двигает курсор!)
 ```
 

@@ -35,7 +35,7 @@ class PptxToPdfConverter(BaseConverter):
             self._update_progress(30)
 
             # Используем единый метод конвертации
-            success = self.lo_manager.convert_to_pdf(
+            success = self.lo_manager.convert(
                 input_path,
                 output_path,
                 progress_callback=self._update_progress

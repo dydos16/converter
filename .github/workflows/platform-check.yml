@@ -3,6 +3,7 @@ name: Platform check
 # Полная проверка на настоящих Windows и Linux (x86-64):
 #  • smoke-тесты;
 #  • сквозная проверка: окно, конвертация через интерфейс, автоустановка LibreOffice с нуля, DOCX → PDF;
+#  • все пары форматов: результат — действительно нужный формат, и текст доехал;
 #  • настоящий экран и настоящая мышь: клики, колёсико, перетаскивание линзы и окна, скриншоты;
 #  • Windows: автоустановка LibreOffice от обычного пользователя без прав администратора.
 # Опубликованные релизы проверяет release-check.yml.
@@ -41,6 +42,9 @@ jobs:
         run: python tests/integration_check.py
         env:
           QT_QPA_PLATFORM: offscreen
+
+      - name: All conversions (every format pair)
+        run: python tests/formats_check.py
 
       - name: Real screen and mouse
         run: python tests/ui_check.py screenshots
@@ -128,6 +132,9 @@ jobs:
         run: python tests/integration_check.py
         env:
           QT_QPA_PLATFORM: offscreen
+
+      - name: All conversions (every format pair)
+        run: python tests/formats_check.py
 
       - name: Real screen and mouse (Xvfb + openbox)
         run: |

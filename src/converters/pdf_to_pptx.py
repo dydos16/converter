@@ -52,6 +52,10 @@ class PdfToPptxConverter(BaseConverter):
             return shutil.which('pdfinfo') is not None
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        # ppt/odp писать сами не умеем: делаем PPTX и пересохраняем через LibreOffice
+        if output_path.suffix.lower() != '.pptx':
+            from src.core.libreoffice_manager import LibreOfficeManager
+            return LibreOfficeManager().convert_via(lambda pptx: self.convert(input_path, pptx), output_path, '.pptx')
         try:
             self._update_status("Проверка зависимостей...")
             self._update_progress(10)

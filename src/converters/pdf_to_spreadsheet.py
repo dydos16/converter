@@ -17,6 +17,10 @@ class PdfToSpreadsheetConverter(BaseConverter):
         return ['xlsx', 'xls', 'csv']
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        # xls писать сами не умеем (openpyxl — только xlsx): делаем XLSX и пересохраняем через LibreOffice
+        if output_path.suffix.lower() == '.xls':
+            from src.core.libreoffice_manager import LibreOfficeManager
+            return LibreOfficeManager().convert_via(lambda xlsx: self.convert(input_path, xlsx), output_path, '.xlsx')
         try:
             self._update_status("Извлечение таблиц из PDF...")
             self._update_progress(10)
@@ -119,7 +123,7 @@ class PdfToSpreadsheetConverter(BaseConverter):
             return False
 
     def _save_rows(self, rows: list, output_path: Path, output_ext: str) -> bool:
-        """Сохраняет список строк (lists of str) в xlsx/xls/csv."""
+        """Сохраняет список строк (lists of str) в xlsx/csv."""
         try:
             if output_ext == 'csv':
                 import csv
@@ -129,23 +133,7 @@ class PdfToSpreadsheetConverter(BaseConverter):
                         writer.writerow(row)
                 return True
 
-            if output_ext in ('xlsx', 'xls'):
-                import openpyxl
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                for row in rows:
-                    ws.append(row)
-
-                # openpyxl не умеет .xls — сначала пишем xlsx, затем конвертируем через LibreOffice
-                if output_ext == 'xls':
-                    tmp_xlsx = output_path.with_suffix('.xlsx')
-                    wb.save(str(tmp_xlsx))
-                    return self._convert_xlsx_to_xls(tmp_xlsx, output_path)
-
-                wb.save(str(output_path))
-                return True
-
-            # Неизвестный формат — xlsx по умолчанию
+            # xlsx (xls приходит сюда уже как промежуточный xlsx — см. convert)
             import openpyxl
             wb = openpyxl.Workbook()
             ws = wb.active
@@ -156,38 +144,4 @@ class PdfToSpreadsheetConverter(BaseConverter):
 
         except Exception as e:
             logger.error(f"Ошибка сохранения таблицы: {e}")
-            return False
-
-    def _convert_xlsx_to_xls(self, xlsx_path: Path, xls_path: Path) -> bool:
-        """Конвертирует xlsx в xls через LibreOffice."""
-        try:
-            import subprocess
-            from src.core.libreoffice_manager import LibreOfficeManager
-            lo_manager = LibreOfficeManager()
-            soffice = lo_manager.get_soffice_path() or lo_manager._find_soffice()
-            if not soffice:
-                logger.error("LibreOffice не найден для конвертации xlsx->xls")
-                return False
-
-            user_inst = lo_manager._get_user_profile_path().replace('file://', '-env:UserInstallation=file://')
-
-            cmd = [
-                str(soffice),
-                user_inst,
-                '--headless', '--invisible', '--nocrashreport',
-                '--nofirststartwizard', '--nologo', '--norestore',
-                '--convert-to', 'xls',
-                '--outdir', str(xls_path.parent),
-                str(xlsx_path)
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            expected = xls_path.parent / f"{xlsx_path.stem}.xls"
-            if expected.exists():
-                if expected != xls_path:
-                    expected.rename(xls_path)
-                return True
-            logger.error(f"xls не создан: {result.stderr[:200]}")
-            return False
-        except Exception as e:
-            logger.error(f"Ошибка конвертации xlsx->xls: {e}")
             return False

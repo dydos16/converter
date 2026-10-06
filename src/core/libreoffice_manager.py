@@ -11,12 +11,13 @@ import os
 import re
 import sys
 import tarfile
+import tempfile
 import threading
 import zipfile
 import shutil
 import urllib.request
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from loguru import logger
 from PySide6.QtCore import QObject, QTimer, QThread, Signal
 
@@ -233,7 +234,7 @@ class LibreOfficeManager(QObject):
 
     def _get_optimized_cmd(self, input_path: Path, output_path: Path) -> list:
         """
-        Возвращает оптимизированную команду LibreOffice для конвертации в PDF.
+        Возвращает оптимизированную команду LibreOffice для конвертации в формат по расширению output_path.
         Использует изолированный пользовательский профиль и параметры, ускоряющие
         конвертацию, НЕ снижая качество.
         """
@@ -252,9 +253,9 @@ class LibreOfficeManager(QObject):
             '--nodefault',          # Не загружать документ по умолчанию
         ]
 
-        # Параметры PDF
+        # Формат — по расширению результата: pdf, doc, odt, rtf, ppt, odp, xls…
         cmd.extend([
-            '--convert-to', 'pdf',
+            '--convert-to', output_path.suffix.lstrip('.').lower(),
             '--outdir', str(output_path.parent),
             str(input_path)
         ])
@@ -554,9 +555,18 @@ class LibreOfficeManager(QObject):
         """Возвращает путь к soffice, если доступен."""
         return self._soffice_path if self._is_available else None
 
-    def convert_to_pdf(self, input_path: Path, output_path: Path, progress_callback=None) -> bool:
+    def convert_via(self, make: Callable[[Path], bool], output_path: Path, middle_ext: str) -> bool:
         """
-        Конвертирует документ в PDF через LibreOffice.
+        Для форматов, которые наш код писать не умеет (doc, odt, rtf, ppt, odp, xls): make() пишет
+        промежуточный файл (.docx/.pptx/.xlsx) во временную папку, LibreOffice пересохраняет его в output_path.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            middle = Path(tmp) / f"{output_path.stem}{middle_ext}"
+            return make(middle) and self.convert(middle, output_path)
+
+    def convert(self, input_path: Path, output_path: Path, progress_callback=None) -> bool:
+        """
+        Конвертирует документ через LibreOffice в формат по расширению output_path (pdf, doc, odt, xls…).
         Выполняет блокирующий вызов — должен использоваться в QThread (например, через JobManager).
         """
         # Ленивая проверка: если ещё не искали soffice, ищем сейчас
@@ -588,17 +598,17 @@ class LibreOfficeManager(QObject):
                 self._report_missing_libraries(result.stderr)
                 return False
 
-            # LibreOffice создает файл с тем же именем, но .pdf в outdir
-            expected_pdf = output_path.parent / f"{input_path.stem}.pdf"
-            if expected_pdf.exists():
-                if expected_pdf != output_path:
-                    expected_pdf.rename(output_path)
+            # LibreOffice кладёт в outdir файл с именем исходного и новым расширением
+            made = output_path.parent / f"{input_path.stem}.{output_path.suffix.lstrip('.').lower()}"
+            if made.exists():
+                if made != output_path:
+                    made.replace(output_path)
                 logger.info(f"Конвертация успешна: {output_path}")
                 if progress_callback:
                     progress_callback(100)
                 return True
             else:
-                logger.error(f"Ожидаемый PDF не найден: {expected_pdf}")
+                logger.error(f"LibreOffice не создал {made}")
                 return False
 
         except subprocess.TimeoutExpired:
