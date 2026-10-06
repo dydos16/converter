@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QLabel,
-    QFileDialog, QTextEdit, QApplication, QScrollArea,
+    QFileDialog, QTextEdit, QApplication, QScrollArea, QMessageBox,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer, Slot, QPropertyAnimation, QEasingCurve, QPoint, QSize
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QFontDatabase, QShortcut, QKeySequence, QPalette
@@ -1015,6 +1015,17 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         """Обработчик закрытия окна"""
+        # Идёт конвертация — не обрываем молча: очередь пропадёт, а текущие файлы останутся недописанными
+        if self.conversion_in_progress:
+            jobs = [self.job_manager.get_job(i) for i in self._batch]
+            left = sum(1 for job in jobs if job and job.get_status() in (JobStatus.PENDING, JobStatus.PROCESSING))
+            answer = QMessageBox.question(
+                self, "Идёт конвертация",
+                f"Ещё не готово: {files_word(left)}. Прервать конвертацию и закрыть программу?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         try:
             self.status_timer.stop()
         except RuntimeError:

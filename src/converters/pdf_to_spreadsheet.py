@@ -8,7 +8,7 @@ from loguru import logger
 
 
 class PdfToSpreadsheetConverter(BaseConverter):
-    """Конвертер PDF в таблицы через pdfplumber (без pandas)."""
+    """Конвертер PDF в таблицы через PyMuPDF (без pandas)."""
 
     def __init__(self):
         super().__init__()
@@ -28,69 +28,48 @@ class PdfToSpreadsheetConverter(BaseConverter):
         if not self._require_text_layer(input_path):
             return False
         try:
+            import fitz
+            from .pdf_text import page_text
+
             self._update_status("Извлечение таблиц из PDF...")
             self._update_progress(10)
 
-            try:
-                import pdfplumber
+            # lattice/auto — таблицы по линиям рамки; stream — без рамок, по выравниванию текста
+            strategy = "text" if self.table_strategy == 'stream' else "lines"
+            all_tables = []
+            with fitz.open(str(input_path)) as pdf:
+                for page_num, page in enumerate(pdf):
+                    self._update_progress(10 + int(page_num / max(len(pdf), 1) * 70))
+                    for table in page.find_tables(strategy=strategy).tables:
+                        # Текст ячейки — по её области через page_text: pdfplumber на PDF со шрифтом Calibri
+                        # (сделанных на Windows) выдавал «Отчё(cid:5)т» вместо «Отчёт»
+                        rows = [[page_text(page, clip=cell).replace("\n", " ") if cell else "" for cell in row.cells]
+                                for row in table.rows]
+                        rows = [row for row in rows if any(cell.strip() for cell in row)]
+                        if len(rows) > 1:
+                            all_tables.append(rows)
+                            self._update_status(f"Найдена таблица на странице {page_num + 1}")
 
-                self._update_status("Анализ PDF...")
-                self._update_progress(30)
+            if not all_tables:
+                self._update_status("Таблицы не найдены, извлекаем текст...")
+                return self._extract_text_fallback(input_path, output_path)
 
-                all_tables = []
+            self._update_progress(80)
+            # Несколько таблиц — подряд, с разделителями
+            rows = []
+            for i, table in enumerate(all_tables):
+                if len(all_tables) > 1:
+                    rows.append([f"=== Таблица {i + 1} ==="])
+                rows += table
+                if len(all_tables) > 1:
+                    rows.append([""])
 
-                with pdfplumber.open(str(input_path)) as pdf:
-                    total_pages = len(pdf.pages)
-
-                    for page_num, page in enumerate(pdf.pages):
-                        self._update_progress(30 + int((page_num / max(total_pages, 1)) * 50))
-
-                        # lattice/auto — таблицы по линиям рамки; stream — без рамок, по выравниванию текста
-                        tables = page.extract_tables(
-                            {"vertical_strategy": "text", "horizontal_strategy": "text"}
-                            if self.table_strategy == 'stream' else None)
-                        if tables:
-                            for table in tables:
-                                if table and len(table) > 1:
-                                    cleaned = [row for row in table if any(cell and str(cell).strip() for cell in row)]
-                                    if cleaned:
-                                        all_tables.append(cleaned)
-                                        self._update_status(f"Найдена таблица на странице {page_num + 1}")
-
-                if not all_tables:
-                    self._update_status("Таблицы не найдены, извлекаем текст...")
-                    return self._extract_text_fallback(input_path, output_path)
-
-                self._update_progress(80)
-                output_ext = output_path.suffix.lower().lstrip('.')
-
-                # Объединяем таблицы в список строк (с разделителями)
-                rows = []
-                for i, table in enumerate(all_tables):
-                    if len(all_tables) > 1:
-                        rows.append([f"=== Table {i + 1} ==="])
-                    for row in table:
-                        rows.append([str(c) if c is not None else "" for c in row])
-                    if len(all_tables) > 1:
-                        rows.append([""])
-
-                if not self._save_rows(rows, output_path, output_ext):
-                    return False
-
-                self._update_progress(100)
-                self._update_status(f"Извлечено {len(all_tables)} таблиц")
-                return True
-
-            except ImportError:
-                self._handle_error(
-                    "Установите необходимые библиотеки:\n\n"
-                    "pip install pdfplumber openpyxl\n\n"
-                    "Или используйте виртуальное окружение:\n"
-                    "python3 -m venv venv\n"
-                    "source venv/bin/activate\n"
-                    "pip install pdfplumber openpyxl"
-                )
+            if not self._save_rows(rows, output_path, output_path.suffix.lower().lstrip('.')):
                 return False
+
+            self._update_progress(100)
+            self._update_status(f"Извлечено таблиц: {len(all_tables)}")
+            return True
 
         except Exception as e:
             self._handle_error(f"Ошибка: {str(e)}")

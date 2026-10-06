@@ -83,18 +83,14 @@ sys.argv = [
     "--hidden-import", "PySide6.QtWidgets",
     "--hidden-import", "loguru",
     "--hidden-import", "fitz",
-    "--hidden-import", "pdfplumber",
     "--hidden-import", "openpyxl",
-    "--hidden-import", "pypdf",
     "--hidden-import", "PIL",
     "--hidden-import", "docx",
     "--hidden-import", "pptx",
-    "--hidden-import", "reportlab",
     "--hidden-import", "lxml",
     "--hidden-import", "src.core.libreoffice_manager",
     "--hidden-import", "src.converters",
     "--hidden-import", "src.gui",
-    "--collect-submodules", "pdfplumber",
 ]
 
 for exc in excludes:

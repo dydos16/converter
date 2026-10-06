@@ -21,12 +21,9 @@ Pillow>=10.0.0
 # Documents
 python-docx>=1.0.0
 python-pptx>=0.6.21
-reportlab>=4.0.0
 
 # PDF Processing (fitz = PyMuPDF)
-PyMuPDF>=1.23.0
-pdfplumber>=0.10.0
-pypdf>=3.0.0
+PyMuPDF>=1.26.0      # find_tables(strategy=…), rewrite_images, встроенный OCR
 
 # Spreadsheets
 openpyxl>=3.1.0

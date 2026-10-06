@@ -13,8 +13,8 @@ import traceback
 from pathlib import Path
 
 # Сторонние библиотеки, без которых часть конвертаций не работает
-MODULES = ["PySide6.QtWidgets", "loguru", "PIL", "pillow_heif", "fitz", "pdfplumber", "pypdf",
-           "docx", "pptx", "openpyxl", "reportlab", "lxml"]
+MODULES = ["PySide6.QtWidgets", "loguru", "PIL", "pillow_heif", "fitz", 
+           "docx", "pptx", "openpyxl", "lxml"]
 
 
 def run_self_test(window, report: Path | None) -> int:

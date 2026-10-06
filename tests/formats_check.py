@@ -31,7 +31,7 @@ from loguru import logger  # noqa: E402
 logger.remove()                                   # логи конвертеров не мешают отчёту
 
 TEXT = "Привет, конвертер! Съешь же ещё этих мягких французских булок — 2026"
-TABLE = [["Товар", "Кол-во", "Цена"], ["яблоко", "10", "99,50"], ["груша", "20", "120"]]
+TABLE = [["Товар", "Кол-во", "Цена"], ["яблоко", "10", "99,50"], ["ёлка", "20", "120"]]       # «ё» — на ней ошибалась pdfplumber (Calibri, Windows)
 FILLER = ("В этом разделе рассказывается о продажах за квартал: объёмы выросли, а склад опустел. " * 6).strip()
 IMAGE_FORMATS = ("jpeg", "png", "webp", "bmp", "gif", "tiff")
 
@@ -88,10 +88,11 @@ def sniff(p: Path) -> str:
 
 def text_of(p: Path, kind: str) -> str | None:
     """Текст из результата — где его можно достать без LibreOffice; None — не проверяем."""
-    if kind == "pdf":                              # pdfplumber, а не PyMuPDF приложения: тест не должен повторять его ошибки
-        import pdfplumber
-        with pdfplumber.open(p) as d:
-            return "\n".join(page.extract_text() or "" for page in d.pages)
+    if kind == "pdf":       # pdfplumber на PDF с Calibri (Windows) выдаёт «Отчё(cid:5)т» — читаем как приложение;
+        import fitz         # его сборку строк проверяют строгие проверки фраз со знаками
+        from src.converters.pdf_text import page_text
+        with fitz.open(p) as d:
+            return "\n".join(page_text(page) for page in d)
     if kind == "docx":
         from docx import Document
         d = Document(p)
@@ -255,7 +256,7 @@ def check_pair(src: str, dst: str, files: dict[str, Path], out: Path, pages: int
     if src in ("png", "jpg", "jpeg", "webp", "bmp", "gif", "tiff", "heic", "heif") or want in IMAGE_FORMATS:
         return None
     # Фраза целиком, со знаками: так ловится и испорченная кириллица, и разъехавшиеся запятые
-    markers = ("яблоко", "Кол-во") if {src, dst} & {"xlsx", "xls", "csv"} else ("Привет, конвертер!",)
+    markers = ("яблоко", "Кол-во", "ёлка") if {src, dst} & {"xlsx", "xls", "csv"} else ("Привет, конвертер!",)
     text = text_of(out, kind)
     if text is not None:
         flat = re.sub(r"\s+", " ", text)

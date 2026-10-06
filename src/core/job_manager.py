@@ -109,6 +109,7 @@ class JobManager:
         self.max_concurrent = max_concurrent
         self.lock = Lock()
         self.stop_event = Event()
+        self._slot_freed = Event()      # задача закончилась — раздатчик сразу берёт следующую
         self.worker_thread = None
         self.callbacks = {
             'on_job_started': [],
@@ -234,10 +235,11 @@ class JobManager:
         """Основной цикл обработки очереди"""
         while not self.stop_event.is_set():
             try:
-                # Проверяем, можем ли запустить новую задачу
+                # Все слоты заняты — ждём, пока задача освободит слот (а не спим по полсекунды:
+                # 1000 мелких картинок шли 126 с вместо нескольких). Сброс до проверки — чтобы не проспать
+                self._slot_freed.clear()
                 if self.get_active_jobs_count() >= self.max_concurrent:
-                    import time
-                    time.sleep(0.5)
+                    self._slot_freed.wait(0.5)
                     continue
 
                 # Получаем следующую задачу с таймаутом
@@ -346,6 +348,7 @@ class JobManager:
             with self.lock:
                 if job.id in self.active_jobs:
                     del self.active_jobs[job.id]
+            self._slot_freed.set()
 
     def register_callback(self, event: str, callback: Callable):
         """Регистрирует callback для события"""
