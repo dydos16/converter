@@ -503,6 +503,10 @@ class MainWindow(QMainWindow):
                 index = self.input_format_combo.findText(inp)
                 if index >= 0:
                     self.input_format_combo.setCurrentIndex(index)
+                    # и «В»: иначе после PDF → TXT в новом сеансе стояло бы PDF → BMP (первый по алфавиту)
+                    index = self.output_format_combo.findText(out)
+                    if index >= 0:
+                        self.output_format_combo.setCurrentIndex(index)
 
     def save_settings(self):
         """Сохраняет настройки"""

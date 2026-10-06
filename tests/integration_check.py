@@ -76,7 +76,13 @@ def main() -> int:
             wait(app, .4)
         check("Вкладки переключаются", w.pages.currentIndex() == 0 and w.tabs.currentIndex() == 0)
 
-        # 2. Выпадающее меню формата
+        # 2. Последняя пара форматов восстанавливается целиком
+        w.settings.settings['recent_formats'] = ["pdf→txt"]
+        w.load_settings()
+        pair = f"{w.input_format_combo.currentText()}→{w.output_format_combo.currentText()}"
+        check("Последние форматы восстанавливаются: PDF → TXT", pair == "pdf→txt", pair)
+
+        # Выпадающее меню формата
         w.input_format_combo.setCurrentText("png")
         w.output_format_combo.showPopup()
         wait(app, .5)
