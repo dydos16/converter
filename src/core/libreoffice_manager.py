@@ -19,7 +19,7 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, Optional
 from loguru import logger
-from PySide6.QtCore import QLockFile, QObject, QTimer, QThread, Signal
+from PySide6.QtCore import QLockFile, QObject, QTimer, Signal
 from src.utils.helpers import child_env
 
 
@@ -101,6 +101,7 @@ class LibreOfficeManager(QObject):
     install_progress = Signal(int, str)         # percent(0-100), status_message
     install_finished = Signal(bool, str)        # success, message
     libraries_missing = Signal(str)             # каких системных библиотек не хватает soffice
+    _install_done = Signal()                    # поток установки закончил — обрабатываем в GUI-потоке
 
     _instance: Optional['LibreOfficeManager'] = None
 
@@ -121,12 +122,13 @@ class LibreOfficeManager(QObject):
         self._is_available: bool = False
         self._is_checking: bool = False
         self._check_timer: Optional[QTimer] = None
-        self._install_thread: Optional[QThread] = None
+        self._install_thread: Optional[threading.Thread] = None
         self._check_attempted: bool = False
         self._profile_lock = threading.Lock()
         self._profile_slots: dict[int, threading.Thread] = {}
         # Проверка идёт в фоновом потоке; таймер останавливаем уже в GUI-потоке
         self.check_finished.connect(self._on_check_finished)
+        self._install_done.connect(self._on_install_thread_finished)
 
         # Настройки таймера для фоновой проверки
         self._check_interval = 5000  # 5 секунд
@@ -496,17 +498,25 @@ class LibreOfficeManager(QObject):
     def start_auto_install(self):
         """
         Запускает фоновую установку LibreOffice, если он не установлен.
-        Не блокирует GUI — установка выполняется в отдельном QThread.
+        Не блокирует GUI — установка выполняется в фоновом потоке.
         """
         if self._is_available or self._install_thread is not None:
             return
 
         self.status_changed.emit("LibreOffice не установлен, загрузка...", False)
 
-        self._install_thread = QThread()
-        self._install_thread.run = self._do_install_blocking  # type: ignore[method-assign]
-        self._install_thread.finished.connect(self._on_install_thread_finished)
+        # Поток-демон, а не QThread: программу закрывают посреди скачивания (оно идёт минуты), и Qt обрывал
+        # процесс аварийно — «QThread: Destroyed while thread is still running». Демон просто прерывается:
+        # недокачанный архив и недораспакованный LibreOffice (метка .installing) переделает следующий запуск
+        self._install_thread = threading.Thread(target=self._install_in_background, daemon=True,
+                                                name="LibreOfficeInstall")
         self._install_thread.start()
+
+    def _install_in_background(self):
+        try:
+            self._do_install_blocking()
+        finally:
+            self._install_done.emit()
 
     def _do_install_blocking(self):
         """Выполняет установку LibreOffice (блокирующий, в потоке)."""
@@ -571,9 +581,7 @@ class LibreOfficeManager(QObject):
 
     def _on_install_thread_finished(self):
         """Обработчик завершения потока установки."""
-        if self._install_thread:
-            self._install_thread.deleteLater()
-            self._install_thread = None
+        self._install_thread = None
 
         # Перепроверяем доступность
         self._soffice_path = None

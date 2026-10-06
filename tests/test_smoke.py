@@ -282,7 +282,33 @@ def test_csv_opens_in_local_excel():
         assert (d / f"p{delimiter}.csv").read_text(encoding="utf-8-sig").strip() == f"а{delimiter}б"
 
 
+def test_closing_during_libreoffice_download_does_not_crash():
+    """Первый запуск: LibreOffice качается несколько минут, программу закрывают — Qt обрывал процесс
+    аварийно («QThread: Destroyed while thread is still running»)."""
+    import subprocess
+    code = f"""
+import os, sys, time, tempfile
+from pathlib import Path
+sys.path.insert(0, {str(Path(__file__).resolve().parent.parent)!r})
+from PySide6.QtCore import QCoreApplication, QTimer
+app = QCoreApplication([])
+from src.core.libreoffice_manager import LibreOfficeManager
+lo = LibreOfficeManager()
+root = Path(tempfile.mkdtemp())
+LibreOfficeManager.get_app_support_dir = staticmethod(lambda: root)
+lo._is_available = False
+lo._libreoffice_archive_url = lambda: "https://example.invalid/libreoffice.tar.gz"
+lo._download_with_progress = lambda url, dest: time.sleep(30)      # «скачивается»
+lo.start_auto_install()
+QTimer.singleShot(500, app.quit)                                    # пользователь закрыл программу
+sys.exit(app.exec())
+"""
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=25)
+    assert r.returncode == 0, (r.returncode, r.stderr[-500:])
+
+
 if __name__ == "__main__":
+    test_closing_during_libreoffice_download_does_not_crash()
     test_csv_opens_in_local_excel()
     test_busy_libreoffice_profile_falls_back_to_own_profile()
     test_failed_conversion_leaves_no_partial_file()
