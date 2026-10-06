@@ -40,13 +40,18 @@ def _csv_value(value, comma: bool):
 
 
 def _cell(value: str):
-    """Числа из CSV — числами, иначе Excel покажет их текстом. Коды с ведущим нулём и длинные номера не трогаем."""
+    """Числа из CSV и таблиц PDF — числами, иначе Excel покажет их текстом и не сложит.
+    Коды с ведущим нулём и длинные номера не трогаем."""
     # Управляющие символы (цвета терминала в логах, мусор выгрузок) Excel хранить не умеет — вся таблица падала
     value = ILLEGAL_CHARACTERS_RE.sub("", value)
-    if re.fullmatch(r"-?(0|[1-9]\d{0,14})", value):
-        return int(value)
-    if re.fullmatch(r"-?(0|[1-9]\d{0,14})[.,]\d+", value):
-        return float(value.replace(",", "."))
+    number = value.strip()
+    # «1 234 567», «1 234,56» — разряды через пробел (обычный, неразрывный, узкий): так пишут в России
+    if re.fullmatch(r"-?[1-9]\d{0,2}([ \u00a0\u202f]\d{3})+([.,]\d+)?", number):
+        number = re.sub(r"[ \u00a0\u202f]", "", number)
+    if re.fullmatch(r"-?(0|[1-9]\d{0,14})", number):
+        return int(number)
+    if re.fullmatch(r"-?(0|[1-9]\d{0,14})[.,]\d+", number):
+        return float(number.replace(",", "."))
     return value
 
 
