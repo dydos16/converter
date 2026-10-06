@@ -329,8 +329,10 @@ class JobManager:
                 self._trigger_callback('on_job_completed', job)
                 logger.success(f"Задача {job.id} успешно выполнена")
             else:
-                # Не затираем конкретную причину, если конвертер её уже сообщил
-                job.mark_failed(job.error_message or "Конвертация не удалась")
+                # Не затираем конкретную причину, если конвертер её уже сообщил; иначе — что сказал LibreOffice
+                from src.core.libreoffice_manager import LibreOfficeManager
+                lo = LibreOfficeManager._instance       # не создаём: синглтон из рабочего потока жил бы в нём
+                job.mark_failed(job.error_message or (lo and lo.failure_reason()) or "Конвертация не удалась")
                 with self.lock:
                     self._job_counters['processing'] -= 1
                     self._job_counters['failed'] += 1

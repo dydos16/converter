@@ -89,6 +89,7 @@ def unpack_deb(deb: Path, dest: Path) -> None:
 
 
 INSTALLING = ".installing"      # метка незавершённой распаковки LibreOffice
+LOAD_FAILED = "source file could not be loaded"     # так soffice сообщает, что не смог открыть файл
 LO_MISSING ="Для этой конвертации нужен LibreOffice — приложение скачивает его само, попробуйте чуть позже."
 
 
@@ -126,6 +127,7 @@ class LibreOfficeManager(QObject):
         self._check_attempted: bool = False
         self._profile_lock = threading.Lock()
         self._profile_slots: dict[int, threading.Thread] = {}
+        self._failure = threading.local()       # почему не удалась последняя конвертация этого потока
         # Проверка идёт в фоновом потоке; таймер останавливаем уже в GUI-потоке
         self.check_finished.connect(self._on_check_finished)
         self._install_done.connect(self._on_install_thread_finished)
@@ -616,18 +618,24 @@ class LibreOfficeManager(QObject):
             middle = Path(tmp) / f"{output_path.stem}{middle_ext}"
             return make(middle) and self.convert(middle, output_path)
 
+    def failure_reason(self) -> Optional[str]:
+        """Понятная причина, почему последняя конвертация в этом потоке не удалась (None — неизвестна)."""
+        return getattr(self._failure, "reason", None)
+
     def convert(self, input_path: Path, output_path: Path, progress_callback=None,
                 infilter: Optional[str] = None) -> bool:
         """
         Конвертирует документ через LibreOffice в формат по расширению output_path (pdf, doc, odt, xls…).
         Выполняет блокирующий вызов — должен использоваться в QThread (например, через JobManager).
         """
+        self._failure.reason = None
         # Ленивая проверка: если ещё не искали soffice, ищем сейчас
         if not self._check_attempted:
             self.is_available()
 
         if not self._is_available:
             logger.error("LibreOffice недоступен для конвертации")
+            self._failure.reason = LO_MISSING
             return False
 
         if not self._soffice_path:
@@ -660,9 +668,9 @@ class LibreOfficeManager(QObject):
                         continue
                     # Профиль занят другим LibreOffice (вторая копия программы; soffice.bin, оставшийся после
                     # тайм-аута или закрытия программы): soffice молча отдаёт задачу ему и выходит с кодом 0,
-                    # а тот её теряет. Признак — ни строчки вывода и нет файла. Повторяем на своём профиле
-                    if (result.returncode == 0 and not result.stdout.strip() and not spare.exists()
-                            and next(Path(workdir).glob(f"*.{fmt}"), None) is None):
+                    # а тот её теряет. Признак — ни строчки вывода, нет файла и нет ошибки чтения. Повторяем на своём
+                    if (result.returncode == 0 and not result.stdout.strip() and LOAD_FAILED not in result.stderr
+                            and not spare.exists() and next(Path(workdir).glob(f"*.{fmt}"), None) is None):
                         logger.warning("Профиль LibreOffice занят другим процессом — повторяем на временном профиле")
                         spare.mkdir()
                         cmd[1] = f"-env:UserInstallation={spare.as_uri()}"
@@ -671,7 +679,10 @@ class LibreOfficeManager(QObject):
 
                 if result.returncode != 0:
                     logger.error(f"LibreOffice ошибка (код {result.returncode}): {result.stderr}")
-                    self._report_missing_libraries(result.stderr)
+                    self._failure.reason = (
+                        "LibreOffice не запускается: в системе не хватает библиотек — команда установки в «Журнале»."
+                        if self._report_missing_libraries(result.stderr)
+                        else f"LibreOffice завершился с ошибкой (код {result.returncode}).")
                     return False
 
                 # Во временной папке результат — единственный файл. Имя не угадываем: необычные символы
@@ -679,6 +690,9 @@ class LibreOfficeManager(QObject):
                 made = next(Path(workdir).glob(f"*.{fmt}"), None)
                 if made is None:
                     logger.error(f"LibreOffice не создал .{fmt}: {(result.stdout + result.stderr).strip()[-400:]}")
+                    if LOAD_FAILED in result.stderr:
+                        self._failure.reason = (f"LibreOffice не смог открыть {input_path.name} — файл повреждён "
+                                                f"или сохранён в неподдерживаемом виде.")
                     return False
                 shutil.copyfile(made, output_path)
                 logger.info(f"Конвертация успешна: {output_path}")
@@ -688,6 +702,7 @@ class LibreOfficeManager(QObject):
 
         except subprocess.TimeoutExpired:
             logger.error("Превышено время конвертации LibreOffice (>300s)")
+            self._failure.reason = "LibreOffice не справился за 5 минут — файл слишком большой или повреждён."
             return False
         except Exception as e:
             logger.error(f"Ошибка конвертации через LibreOffice: {e}")

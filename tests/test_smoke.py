@@ -307,7 +307,36 @@ sys.exit(app.exec())
     assert r.returncode == 0, (r.returncode, r.stderr[-500:])
 
 
+def test_libreoffice_failure_is_explained():
+    """LibreOffice не смог открыть файл: пользователю — понятная причина, а не «Конвертация не удалась»,
+    и без лишнего перезапуска на временном профиле (это не «профиль занят»)."""
+    import subprocess
+    import tempfile
+    import zipfile
+    from unittest import mock
+    from src.core.job_manager import JobManager
+    from src.core.libreoffice_manager import LibreOfficeManager
+    lo = LibreOfficeManager()
+    d = Path(tempfile.mkdtemp())
+    with zipfile.ZipFile(d / "таблица.xlsx", "w") as z:          # zip, но внутри не таблица
+        z.writestr("[Content_Types].xml", "<broken")
+    calls = []
+
+    def soffice(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "Error: source file could not be loaded\n")
+
+    jm = JobManager()
+    job = jm.get_job(jm.add_job(d / "таблица.xlsx", d / "таблица.pdf", "xlsx", "pdf"))
+    with mock.patch.object(lo, "_check_attempted", True), mock.patch.object(lo, "_is_available", True), \
+         mock.patch.object(lo, "_soffice_path", Path(sys.executable)), mock.patch("subprocess.run", soffice):
+        jm._process_job(job)
+    assert "не смог открыть таблица.xlsx" in job.error_message, job.error_message
+    assert len(calls) == 1
+
+
 if __name__ == "__main__":
+    test_libreoffice_failure_is_explained()
     test_closing_during_libreoffice_download_does_not_crash()
     test_csv_opens_in_local_excel()
     test_busy_libreoffice_profile_falls_back_to_own_profile()

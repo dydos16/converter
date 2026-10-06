@@ -45,7 +45,7 @@ class PptxToPdfConverter(BaseConverter):
                 self._update_status("Готово!")
                 return True
             else:
-                self._handle_error("Ошибка конвертации")
+                self._handle_error(self.lo_manager.failure_reason() or "Ошибка конвертации")
                 return False
 
         except Exception as e:
