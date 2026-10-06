@@ -78,20 +78,31 @@ class PdfToDocxConverter(BaseConverter):
         tables = [] if self.extract_text_only else page.find_tables().tables
         areas = [fitz.Rect(t.bbox) for t in tables]
         # Текст ячейки — по её области, теми же правилами, что и абзацы (иначе «Кол-во» распадается на куски)
-        items = [(t.bbox[1], "table", [[page_text(page, clip=cell) if cell else "" for cell in row.cells]
-                                       for row in t.rows]) for t in tables]
+        others = [(t.bbox[1], "table", [[page_text(page, clip=cell) if cell else "" for cell in row.cells]
+                                        for row in t.rows]) for t in tables]
+        texts = []
         for block in page.get_text("rawdict")["blocks"]:
             rect = fitz.Rect(block["bbox"])
             if any(((rect.tl + rect.br) / 2) in area for area in areas):
                 continue                                # текст ячеек уже попадёт в таблицу
             if block["type"] == 0:
-                items.append((rect.y0, "text", block))
+                texts.append((rect.y0, "text", block))
             elif not self.extract_text_only:
-                items.append((rect.y0, "image", block))
+                others.append((rect.y0, "image", block))
+
+        # Абзацы — в порядке записи в PDF: это порядок чтения (в две колонки — сначала левая, потом правая;
+        # сортировка по высоте перемешала бы колонки). Таблицы и картинки — перед первым абзацем ниже них
+        others.sort(key=lambda item: item[0])
+        ordered = []
+        for item in texts:
+            while others and others[0][0] <= item[0]:
+                ordered.append(others.pop(0))
+            ordered.append(item)
+        ordered += others
 
         section = doc.sections[-1]
         text_width = section.page_width - section.left_margin - section.right_margin
-        for _, kind, data in sorted(items, key=lambda item: item[0]):
+        for _, kind, data in ordered:
             if kind == "table":
                 self._add_table(doc, data)
             elif kind == "image":

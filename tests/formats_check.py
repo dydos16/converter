@@ -447,6 +447,68 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
                     return f"в файле страницы {n} лежит другая страница"
         return None
 
+    def password_pdf():
+        import fitz
+        from src.core.job_manager import ConversionJob, JobManager
+        src = d / "secret.pdf"
+        with fitz.open(files["pdf"]) as doc:
+            doc.save(src, encryption=fitz.PDF_ENCRYPT_AES_256, user_pw="1234", owner_pw="1234")
+        job = ConversionJob("secret", src, d / "secret.txt", "pdf", "txt")
+        JobManager()._process_job(job)                  # как в приложении: через очередь задач
+        return None if "паролем" in job.error_message else f"сообщение: {job.error_message!r}"
+
+    def compress_scan():
+        import fitz
+        src = d / "scan300.pdf"
+        with fitz.open(files["pdf"]) as pdf:
+            png = pdf[0].get_pixmap(dpi=300).tobytes("png")
+        Image.open(io.BytesIO(png)).convert("RGB").save(src, "PDF", resolution=300, quality=95)
+        out = d / "scan300_small.pdf"
+        ok, err = run(src, out, compression_level=6)
+        if not ok:
+            return why(err)
+        before, after = src.stat().st_size, out.stat().st_size
+        return None if after < before * 0.7 else f"{before // 1024} КБ → {after // 1024} КБ — почти не сжалось"
+
+    def two_columns_to_docx():
+        from docx import Document
+        from docx.enum.text import WD_BREAK
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        src_docx = d / "columns.docx"
+        doc = Document()
+        cols = OxmlElement("w:cols")
+        cols.set(qn("w:num"), "2")
+        doc.sections[0]._sectPr.append(cols)
+        for i in range(1, 6):
+            doc.add_paragraph(f"Колонка один, абзац {i}. {FILLER[:120]}")
+        doc.add_paragraph().add_run().add_break(WD_BREAK.COLUMN)
+        for i in range(1, 6):
+            doc.add_paragraph(f"Колонка два, абзац {i}. {FILLER[:120]}")
+        doc.save(src_docx)
+        pdf = lo_convert(soffice, profile, src_docx, "pdf", d)
+        out = d / "columns_back.docx"
+        ok, err = run(pdf, out)
+        if not ok:
+            return why(err)
+        order = [("один" if "Колонка один" in p.text else "два") for p in Document(out).paragraphs
+                 if "Колонка" in p.text]
+        return None if order == ["один"] * 5 + ["два"] * 5 else f"порядок абзацев: {' '.join(order)}"
+
+    def rotated_to_pptx():
+        import fitz
+        from pptx import Presentation
+        src = d / "rotated.pdf"
+        with fitz.open(files["pdf"]) as doc:
+            doc[0].set_rotation(90)
+            doc.save(src)
+        out = d / "rotated.pptx"
+        ok, err = run(src, out)
+        if not ok:
+            return why(err)
+        boxes = [s for s in Presentation(out).slides[0].shapes if s.has_text_frame]
+        return None if not boxes else f"{len(boxes)} надписей легли мимо повёрнутой страницы"
+
     def tiff_compressed():
         ok, err = run(files["pdf"], d / "page.tiff")
         if not ok:
@@ -474,6 +536,10 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         ("PDF → DOCX сохраняет оформление", pdf_to_docx_keeps_formatting),
         ("PDF → PNG: страницы по порядку", page_order),
         ("PDF → TIFF сжат", tiff_compressed),
+        ("PDF под паролем: понятное сообщение", password_pdf),
+        ("Сжатие PDF со сканом уменьшает файл", compress_scan),
+        ("PDF в две колонки → DOCX: сначала левая, потом правая", two_columns_to_docx),
+        ("Повёрнутая страница → PPTX: без надписей мимо", rotated_to_pptx),
     ]
 
 
@@ -488,7 +554,8 @@ def main() -> int:
         print("LibreOffice не найден — сначала запустите tests/integration_check.py (он его ставит)")
         return 1
 
-    tmp = Path(tempfile.mkdtemp(prefix="fcp_formats_"))
+    # Кириллица и пробелы в пути — как у русских пользователей Windows («C:\Users\Иван\Мои документы»)
+    tmp = Path(tempfile.mkdtemp(prefix="fcp форматы "))
     pairs = sorted(SUPPORTED_CONVERSIONS)
     failed, started, cases = [], time.time(), []
     try:

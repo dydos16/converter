@@ -95,6 +95,22 @@ def page_text(page: "fitz.Page", clip=None) -> str:
     return "\n".join(line for line in lines if line)
 
 
+def pdf_problem(path: Path) -> str | None:
+    """Почему PDF не обработать: под паролем, пустой или повреждён. None — всё в порядке (и для не-PDF)."""
+    if Path(path).suffix.lower() != ".pdf":
+        return None
+    try:
+        with fitz.open(path) as doc:
+            if doc.needs_pass:
+                return ("PDF защищён паролем. Откройте его в программе для просмотра PDF, сохраните копию "
+                        "без пароля и сконвертируйте её.")
+            if doc.page_count == 0:
+                return "В PDF нет ни одной страницы."
+    except Exception:
+        return "Не удалось открыть PDF — файл повреждён или это не PDF."
+    return None
+
+
 def has_text(page: "fitz.Page") -> bool:
     """Есть ли у страницы текстовый слой (у скана — нет)."""
     return bool(page.get_text().strip())

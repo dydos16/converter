@@ -309,8 +309,14 @@ class JobManager:
 
             job.converter = converter
 
-            # Выполняем конвертацию
-            success = converter.convert(job.input_path, job.output_path)
+            # PDF под паролем или битый — понятная причина вместо «document closed or encrypted»
+            from src.converters.pdf_text import pdf_problem
+            problem = pdf_problem(job.input_path)
+            if problem:
+                error_callback(problem)
+                success = False
+            else:
+                success = converter.convert(job.input_path, job.output_path)
 
             if success:
                 job.mark_completed()

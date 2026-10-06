@@ -1,6 +1,7 @@
 """
 Сжатие и оптимизация PDF
 """
+import shutil
 import sys
 import subprocess
 from pathlib import Path
@@ -49,27 +50,28 @@ class PdfCompressor(BaseConverter):
 
                 doc = fitz.open(str(input_path))
 
-                # Настройки сохранения
-                save_options = {
-                    'garbage': self.compression_level,
-                    'clean': True,
-                    'deflate': True,
-                    'deflate_images': self.optimize_images,
-                    'deflate_fonts': True
-                }
-
-                self._update_status("Оптимизация...")
-                self._update_progress(50)
-
-                # Сохраняем с оптимизацией
-                doc.save(str(output_path), **save_options)
+                # Вес PDF — в основном картинки (сканы, фото): пересжимаем их с меньшим разрешением.
+                # Уровень 4–6 — до 150 DPI, качество 80; 7–9 — до 100 DPI, качество 60.
+                # Чёрно-белые сканы (1 бит) не трогаем: в JPEG они только вырастут
+                if self.optimize_images and self.compression_level >= 4:
+                    self._update_status("Сжатие картинок...")
+                    dpi, quality = (150, 80) if self.compression_level <= 6 else (100, 60)
+                    doc.rewrite_images(dpi_threshold=dpi + 50, dpi_target=dpi, quality=quality, bitonal=False)
 
                 if self.remove_metadata:
                     self._update_status("Удаление метаданных...")
                     doc.set_metadata({})
-                    doc.save(str(output_path))
 
+                self._update_status("Оптимизация...")
+                self._update_progress(50)
+                # garbage у PyMuPDF — от 0 до 4; один save со всеми настройками (второй save их терял)
+                doc.save(str(output_path), garbage=min(4, self.compression_level), clean=True, deflate=True,
+                         deflate_images=True, deflate_fonts=True)
                 doc.close()
+
+                # Уже сжатый PDF может только вырасти — тогда оставляем исходный
+                if output_path.stat().st_size >= input_path.stat().st_size and not self.remove_metadata:
+                    shutil.copyfile(input_path, output_path)
 
                 # Проверяем размер
                 original_size = input_path.stat().st_size

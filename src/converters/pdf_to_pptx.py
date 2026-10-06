@@ -65,7 +65,10 @@ class PdfToPptxConverter(BaseConverter):
                     ox = (prs.slide_width - page.rect.width * scale) / 2
                     oy = (prs.slide_height - page.rect.height * scale) / 2
 
-                    blocks = [b for b in page.get_text("rawdict")["blocks"] if b["type"] == 0] if has_text(page) else []
+                    # Повёрнутая страница (/Rotate) — целиком картинкой, как скан: координаты текста у неё
+                    # в неповёрнутой системе, и надписи легли бы мимо
+                    editable = has_text(page) and not page.rotation
+                    blocks = [b for b in page.get_text("rawdict")["blocks"] if b["type"] == 0] if editable else []
                     background = bare[i]
                     if blocks:
                         for block in blocks:
