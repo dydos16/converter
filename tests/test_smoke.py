@@ -144,7 +144,18 @@ def test_interrupted_libreoffice_install_is_not_used():
     assert [p.name for p in root.iterdir()] == ["profile"]
 
 
+def test_dropped_folder_skips_service_files():
+    """Перетащили папку: замки Word («~$…») и «тени» macOS на флешках («._…») — не файлы для конвертации."""
+    import tempfile
+    from src.gui.main_window import MainWindow
+    folder = Path(tempfile.mkdtemp())
+    for name in ("фото.jpg", "~$отчёт.docx", "._фото.jpg", ".скрытый.png", "СКАН.PNG", "заметки.md"):
+        (folder / name).write_bytes(b"x")
+    assert [p.name for p in MainWindow._files_in(folder)] == sorted(["фото.jpg", "СКАН.PNG"])
+
+
 if __name__ == "__main__":
+    test_dropped_folder_skips_service_files()
     test_interrupted_libreoffice_install_is_not_used()
     test_slow_libreoffice_start_is_not_unavailable()
     test_libreoffice_archive_checksum()

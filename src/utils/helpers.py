@@ -115,6 +115,18 @@ def get_file_size_str(path: Path) -> str:
 
 
 ZIP_FORMATS = {"docx", "pptx", "ppsx", "xlsx", "odt", "odp", "ods"}       # внутри — всегда zip-архив
+OLE_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"                              # старый контейнер Office
+
+
+def _file_contains(path: Path, marker: bytes, chunk: int = 1 << 20) -> bool:
+    """Есть ли в файле последовательность байт — читаем кусками, без загрузки файла целиком."""
+    tail = b""
+    with open(path, "rb") as f:
+        while block := f.read(chunk):
+            if marker in tail + block:
+                return True
+            tail = block[-len(marker):]
+    return False
 
 
 def input_problem(path: Path) -> Optional[str]:
@@ -126,8 +138,16 @@ def input_problem(path: Path) -> Optional[str]:
         return f"Файл пустой: {path.name}."
     ext = path.suffix.lower().lstrip(".")
     if ext in ZIP_FORMATS and not zipfile.is_zipfile(path):
-        # LibreOffice открыл бы такой файл как текст и «успешно» выдал бы абракадабру
-        return f"Файл повреждён или это не {ext.upper()}: {path.name}."
+        with open(path, "rb") as f:
+            ole = f.read(8) == OLE_MAGIC
+        # Документ Office под паролем — не zip, а старый контейнер OLE с потоком EncryptedPackage
+        if ole and _file_contains(path, "EncryptedPackage".encode("utf-16-le")):
+            return (f"Документ защищён паролем: {path.name}. Откройте его в Word, Excel или PowerPoint, "
+                    f"снимите пароль и сконвертируйте снова.")
+        if not ole:
+            # LibreOffice открыл бы такой файл как текст и «успешно» выдал бы абракадабру
+            return f"Файл повреждён или это не {ext.upper()}: {path.name}."
+        # иначе это старый .doc/.xls/.ppt с новым расширением — LibreOffice прочтёт его по содержимому
     if ext == "pdf":
         from src.converters.pdf_text import pdf_problem
         return pdf_problem(path)

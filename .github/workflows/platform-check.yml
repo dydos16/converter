@@ -53,7 +53,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $user = 'fcptester'
+          # Кириллица в имени, как у многих в России: программа и LibreOffice живут в C:\Users\Тестер\…
+          $user = 'Тестер'
           $pw = ConvertTo-SecureString 'Fcp-Ci-2026-Check!' -AsPlainText -Force
           # Обычный пользователь: в группу администраторов не добавляем
           New-LocalUser -Name $user -Password $pw -PasswordNeverExpires | Out-Null

@@ -1011,7 +1011,10 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _files_in(folder: Path) -> list:
         formats = set(ConverterFactory.get_input_formats())
-        return sorted(f for f in folder.iterdir() if f.is_file() and f.suffix.lower().lstrip('.') in formats)
+        # Служебные файлы пропускаем: «~$отчёт.docx» — замок открытого в Word документа,
+        # «._фото.jpg» — «тени», которые macOS оставляет на флешках, прочие скрытые «.файлы»
+        return sorted(f for f in folder.iterdir()
+                      if f.is_file() and f.suffix.lower().lstrip('.') in formats and not f.name.startswith(('~$', '.')))
 
     def closeEvent(self, event):
         """Обработчик закрытия окна"""

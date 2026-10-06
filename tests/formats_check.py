@@ -671,6 +671,44 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         hit = next((row for row in rows if "яблоко" in row), None)
         return None if hit and len(hit) >= 3 else f"строка с «яблоко» не разбита по столбцам: {hit}"
 
+    def password_docx():
+        from src.core.job_manager import ConversionJob, JobManager
+        from src.utils.helpers import OLE_MAGIC
+        src = d / "договор под паролем.docx"     # так устроен DOCX с паролем: контейнер OLE с EncryptedPackage
+        src.write_bytes(OLE_MAGIC + b"\x00" * 2000 + "EncryptedPackage".encode("utf-16-le") + b"\x00" * 600)
+        job = ConversionJob("enc", src, d / "договор.pdf", "docx", "pdf")
+        JobManager()._process_job(job)
+        return None if "паролем" in job.error_message else f"сообщение: {job.error_message!r}"
+
+    def legacy_doc_renamed():
+        src = d / "старый формат.docx"           # .doc, которому дали расширение .docx
+        shutil.copy(files["doc"], src)
+        out = d / "старый формат.pdf"
+        ok, err = run(src, out)
+        if not ok:
+            return why(err)
+        return None if "Привет, конвертер!" in re.sub(r"\s+", " ", text_of(out, "pdf") or "") else "в PDF нет текста"
+
+    def huge_page():
+        import fitz
+        src = d / "a0.pdf"
+        with fitz.open() as doc:
+            doc.new_page(width=2384, height=3370).insert_text((200, 400), "A0", fontsize=120)   # A0
+            doc.new_page(width=842, height=8000).insert_text((50, 100), "long", fontsize=40)    # лента
+            doc.save(src)
+        sizes = []
+        for dst in ("png", "webp"):
+            ok, err = run(src, d / f"a0.{dst}", dpi=600)
+            if not ok:
+                return f"{dst}: {why(err)}"
+            with zipfile.ZipFile(d / "a0.zip") as z:
+                for name in z.namelist():
+                    w, h = Image.open(io.BytesIO(z.read(name))).size
+                    sizes.append((dst, w * h, max(w, h)))
+            (d / "a0.zip").unlink()
+        too_big = [s for s in sizes if s[1] > 100_000_000 or (s[0] == "webp" and s[2] > 16383)]
+        return None if not too_big else f"слишком большие страницы: {too_big}"
+
     def tiff_compressed():
         ok, err = run(files["pdf"], d / "page.tiff")
         if not ok:
@@ -713,6 +751,9 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         ("Пустые, испорченные и удалённые файлы: понятная ошибка, а не «успех»", broken_inputs),
         ("TXT с кодами цветов терминала → DOCX", terminal_log_txt),
         ("Имя с #, %, &, «» и «й» как на Mac → PDF через LibreOffice", odd_file_name),
+        ("DOCX под паролем: понятное сообщение", password_docx),
+        ("Старый DOC с расширением .docx → PDF", legacy_doc_renamed),
+        ("Чертёж A0 и лента при 600 DPI → PNG/WEBP без перерасхода памяти", huge_page),
     ]
 
 
