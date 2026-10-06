@@ -4,6 +4,7 @@ PDF to XML - извлечение данных из PDF в XML
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from .base import BaseConverter
+from .pdf_text import page_text
 from loguru import logger
 
 
@@ -28,6 +29,8 @@ class PdfToXmlConverter(BaseConverter):
         return ['xml']
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        if not self._require_text_layer(input_path):
+            return False
         try:
             self._update_status("Конвертация PDF в XML...")
             self._update_progress(10)
@@ -66,7 +69,7 @@ class PdfToXmlConverter(BaseConverter):
                 page_elem.set("height", str(page.rect.height))
 
                 text_elem = ET.SubElement(page_elem, "text")
-                text_elem.text = page.get_text()
+                text_elem.text = page_text(page)
 
             doc.close()
 

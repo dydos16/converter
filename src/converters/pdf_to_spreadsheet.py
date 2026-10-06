@@ -21,6 +21,8 @@ class PdfToSpreadsheetConverter(BaseConverter):
         if output_path.suffix.lower() == '.xls':
             from src.core.libreoffice_manager import LibreOfficeManager
             return LibreOfficeManager().convert_via(lambda xlsx: self.convert(input_path, xlsx), output_path, '.xlsx')
+        if not self._require_text_layer(input_path):
+            return False
         try:
             self._update_status("Извлечение таблиц из PDF...")
             self._update_progress(10)
@@ -127,7 +129,7 @@ class PdfToSpreadsheetConverter(BaseConverter):
         try:
             if output_ext == 'csv':
                 import csv
-                with open(output_path, 'w', encoding='utf-8', newline='') as f:
+                with open(output_path, 'w', encoding='utf-8-sig', newline='') as f:   # BOM — для русского Excel
                     writer = csv.writer(f)
                     for row in rows:
                         writer.writerow(row)

@@ -3,6 +3,7 @@ PDF to Markdown - конвертация PDF в Markdown
 """
 from pathlib import Path
 from .base import BaseConverter
+from .pdf_text import page_text
 from loguru import logger
 
 
@@ -27,6 +28,8 @@ class PdfToMarkdownConverter(BaseConverter):
         return ['md']
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        if not self._require_text_layer(input_path):
+            return False
         try:
             self._update_status("Конвертация PDF в Markdown...")
             self._update_progress(10)
@@ -49,7 +52,7 @@ class PdfToMarkdownConverter(BaseConverter):
                 self._update_progress(30 + int((page_num / len(doc)) * 60))
 
                 page = doc[page_num]
-                text = page.get_text()
+                text = page_text(page)
 
                 md_content.append(f"## Page {page_num + 1}")
                 md_content.append("")

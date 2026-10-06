@@ -1,11 +1,14 @@
 """
-PDF to DOCX - использует pdf2docx для точной конвертации
+PDF to DOCX через PyMuPDF: текст с оформлением (размер, жирный, курсив, цвет), таблицы Word и картинки —
+в порядке сверху вниз, как на странице. Страница-скан попадает в документ картинкой.
 """
-import sys
-import subprocess
+import io
 from pathlib import Path
 from .base import BaseConverter
+from .pdf_text import block_lines, line_pieces, page_text
 from loguru import logger
+
+BOLD, ITALIC = 16, 2        # флаги шрифта в PyMuPDF
 
 
 class PdfToDocxConverter(BaseConverter):
@@ -13,39 +16,16 @@ class PdfToDocxConverter(BaseConverter):
 
     def __init__(self):
         super().__init__()
-        self.pdf2docx_available = self._check_pdf2docx()
-        self.extract_text_only = False  # По умолчанию сохраняем форматирование
-
-    def _check_pdf2docx(self):
-        """Проверяет доступность pdf2docx"""
-        try:
-            import pdf2docx
-            return True
-        except ImportError:
-            return False
-
-    def _install_pdf2docx(self):
-        """Устанавливает pdf2docx через pip"""
-        try:
-            self._update_status("Установка pdf2docx...")
-            subprocess.check_call([
-                sys.executable, '-m', 'pip', 'install', 'pdf2docx', '--quiet'
-            ])
-            self.pdf2docx_available = True
-            self._update_status("pdf2docx успешно установлен")
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка установки pdf2docx: {e}")
-            return False
+        self.extract_text_only = False
 
     def get_input_formats(self):
         return ['pdf']
 
     def get_output_formats(self):
-        return ['docx']
+        return ['docx', 'doc', 'odt', 'rtf']
 
     def set_extract_text_only(self, text_only: bool):
-        """Устанавливает режим извлечения только текста без форматирования"""
+        """Только текст: без таблиц, картинок и оформления"""
         self.extract_text_only = text_only
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
@@ -54,103 +34,100 @@ class PdfToDocxConverter(BaseConverter):
             from src.core.libreoffice_manager import LibreOfficeManager
             return LibreOfficeManager().convert_via(lambda docx: self.convert(input_path, docx), output_path, '.docx')
         try:
-            self._update_status("Подготовка к конвертации PDF в DOCX...")
+            import fitz
+            from docx import Document
+            from docx.shared import Pt
+
+            self._update_status("Чтение PDF...")
             self._update_progress(10)
+            doc = Document()
+            with fitz.open(input_path) as pdf:
+                # Размер листа — как у PDF (иначе A4 сверстается на американском Letter)
+                section = doc.sections[0]
+                section.page_width, section.page_height = Pt(pdf[0].rect.width), Pt(pdf[0].rect.height)
+                for n, page in enumerate(pdf):
+                    self._update_progress(10 + int(n / len(pdf) * 85))
+                    self._update_status(f"Страница {n + 1} из {len(pdf)}")
+                    if n:
+                        doc.add_page_break()
+                    self._add_page(doc, page)
 
-            # Если pdf2docx недоступен — сразу извлекаем только текст (лёгкий режим)
-            if not self.pdf2docx_available:
-                self._update_status("pdf2docx недоступен, извлекаем только текст...")
-                return self._convert_text_only(input_path, output_path)
-
-            self._update_progress(30)
-
-            if self.extract_text_only:
-                # Режим только текст
-                return self._convert_text_only(input_path, output_path)
-            else:
-                # Полная конвертация с форматированием
-                return self._convert_with_formatting(input_path, output_path)
+            doc.save(str(output_path))
+            self._update_progress(100)
+            self._update_status("Конвертация PDF в DOCX завершена!")
+            return True
 
         except Exception as e:
             self._handle_error(f"Ошибка конвертации PDF в DOCX: {str(e)}")
             logger.exception("Ошибка конвертации PDF в DOCX")
             return False
 
-    def _convert_with_formatting(self, input_path: Path, output_path: Path) -> bool:
-        """Конвертирует PDF в DOCX с сохранением форматирования"""
+    def _add_page(self, doc, page):
+        import fitz
+
+        tables = [] if self.extract_text_only else page.find_tables().tables
+        areas = [fitz.Rect(t.bbox) for t in tables]
+        # Текст ячейки — по её области, теми же правилами, что и абзацы (иначе «Кол-во» распадается на куски)
+        items = [(t.bbox[1], "table", [[page_text(page, clip=cell) if cell else "" for cell in row.cells]
+                                       for row in t.rows]) for t in tables]
+        for block in page.get_text("rawdict")["blocks"]:
+            rect = fitz.Rect(block["bbox"])
+            if any(((rect.tl + rect.br) / 2) in area for area in areas):
+                continue                                # текст ячеек уже попадёт в таблицу
+            if block["type"] == 0:
+                items.append((rect.y0, "text", block))
+            elif not self.extract_text_only:
+                items.append((rect.y0, "image", block))
+
+        section = doc.sections[-1]
+        text_width = section.page_width - section.left_margin - section.right_margin
+        for _, kind, data in sorted(items, key=lambda item: item[0]):
+            if kind == "table":
+                self._add_table(doc, data)
+            elif kind == "image":
+                self._add_image(doc, data, text_width)
+            else:
+                self._add_paragraph(doc, data)
+
+    @staticmethod
+    def _add_table(doc, rows):
+        rows = [row for row in rows if row and any(cell for cell in row)]
+        if not rows:
+            return
+        table = doc.add_table(rows=len(rows), cols=max(len(row) for row in rows))
+        table.style = "Table Grid"
+        for r, row in enumerate(rows):
+            for c, value in enumerate(row):
+                table.cell(r, c).text = (value or "").replace("\n", " ")
+
+    @staticmethod
+    def _add_image(doc, block, text_width):
+        import fitz
+        from docx.shared import Pt
+        x0, _, x1, _ = block["bbox"]
+        width = min(Pt(x1 - x0), text_width)            # ширина на странице, не больше полосы набора
+        data = block["image"]
         try:
-            from pdf2docx import Converter
+            doc.add_picture(io.BytesIO(data), width=width)
+        except Exception:
+            try:                                        # JPEG 2000 и прочее, чего Word не понимает, — в PNG
+                doc.add_picture(io.BytesIO(fitz.Pixmap(data).tobytes("png")), width=width)
+            except Exception as e:
+                logger.warning(f"Картинку из PDF пропустили: {e}")
 
-            self._update_status("Конвертация с сохранением форматирования...")
-            self._update_progress(40)
-
-            # Создаем конвертер
-            cv = Converter(str(input_path))
-
-            self._update_status("Извлечение содержимого...")
-            self._update_progress(60)
-
-            # Конвертируем все страницы
-            cv.convert(
-                str(output_path),
-                start=0,
-                end=None,
-                pages=None  # Все страницы
-            )
-
-            cv.close()
-
-            self._update_progress(100)
-            self._update_status("Конвертация PDF в DOCX успешно завершена!")
-
-            return True
-
-        except Exception as e:
-            logger.error(f"Ошибка при конвертации с форматированием: {e}")
-            # Если не получилось с форматированием, пробуем извлечь только текст
-            self._update_status("Пробуем извлечь только текст...")
-            return self._convert_text_only(input_path, output_path)
-
-    def _convert_text_only(self, input_path: Path, output_path: Path) -> bool:
-        """Извлекает только текст из PDF в DOCX"""
-        try:
-            import pdfplumber
-            from docx import Document
-
-            self._update_status("Извлечение текста из PDF...")
-            self._update_progress(40)
-
-            doc = Document()
-            text_content = []
-
-            with pdfplumber.open(str(input_path)) as pdf:
-                total_pages = len(pdf.pages)
-
-                for i, page in enumerate(pdf.pages):
-                    self._update_progress(40 + int((i / total_pages) * 50))
-
-                    page_text = page.extract_text()
-                    if page_text:
-                        text_content.append(page_text)
-
-            self._update_status("Создание DOCX документа...")
-            self._update_progress(90)
-
-            # Добавляем текст в документ
-            for text in text_content:
-                doc.add_paragraph(text)
-                doc.add_paragraph()  # Пустая строка между страницами
-
-            doc.save(str(output_path))
-
-            self._update_progress(100)
-            self._update_status("Текст успешно извлечен и сохранен!")
-
-            return True
-
-        except ImportError:
-            self._handle_error("Для извлечения текста установите pdfplumber: pip install pdfplumber")
-            return False
-        except Exception as e:
-            self._handle_error(f"Ошибка извлечения текста: {str(e)}")
-            return False
+    def _add_paragraph(self, doc, block):
+        from docx.shared import Pt, RGBColor
+        paragraph = doc.add_paragraph()
+        for i, row in enumerate(block_lines(block)):
+            if i:
+                paragraph.add_run(" ")                  # строки PDF — лишь визуальные переносы, абзац течёт
+            for text, span in line_pieces(row):
+                run = paragraph.add_run(text)
+                if self.extract_text_only or text.isspace():
+                    continue
+                font = span["font"].lower()
+                run.font.size = Pt(round(span["size"] * 2) / 2)
+                run.bold = bool(span["flags"] & BOLD) or "bold" in font
+                run.italic = bool(span["flags"] & ITALIC) or "italic" in font or "oblique" in font
+                if span["color"]:
+                    run.font.color.rgb = RGBColor.from_string(f"{span['color']:06X}")

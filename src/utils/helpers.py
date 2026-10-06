@@ -113,6 +113,17 @@ def get_file_size_str(path: Path) -> str:
     return format_size(size)
 
 
+def read_text_any(path: Path) -> str:
+    """Текст файла в UTF-8 (с BOM или без) или в Windows-1251 — так сохраняют русский Excel и старый Блокнот."""
+    data = Path(path).read_bytes()
+    for encoding in ("utf-8-sig", "cp1251"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return data.decode("latin-1")
+
+
 def format_size(size: float) -> str:
     """183 Б, 4,2 КБ, 12,5 МБ — по-русски, байты без дробей."""
     if size < 1024:

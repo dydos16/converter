@@ -5,6 +5,7 @@ import sys
 import subprocess
 from pathlib import Path
 from .base import BaseConverter
+from .pdf_text import page_text
 from loguru import logger
 
 
@@ -67,6 +68,8 @@ class PdfToTextConverter(BaseConverter):
         return ['txt']
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        if not self._require_text_layer(input_path):
+            return False
         try:
             self._update_status("Извлечение текста из PDF...")
             self._update_progress(10)
@@ -105,7 +108,7 @@ class PdfToTextConverter(BaseConverter):
                 self._update_progress(30 + int((page_num / total_pages) * 60))
 
                 page = doc[page_num]
-                text = page.get_text()
+                text = page_text(page)
 
                 if text.strip():
                     text_content.append(f"--- Страница {page_num + 1} ---")

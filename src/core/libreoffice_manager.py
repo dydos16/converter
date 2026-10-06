@@ -87,6 +87,9 @@ def unpack_deb(deb: Path, dest: Path) -> None:
     raise ValueError(f"{deb.name}: нет data.tar")
 
 
+LO_MISSING = "Для этой конвертации нужен LibreOffice — приложение скачивает его само, попробуйте чуть позже."
+
+
 class LibreOfficeManager(QObject):
     """Синглтон-менеджер для управления LibreOffice (soffice) с ленивой загрузкой."""
 
@@ -232,7 +235,7 @@ class LibreOfficeManager(QObject):
         # as_uri() корректно кодирует пробелы (например в "Application Support") -> %20
         return profile.as_uri()
 
-    def _get_optimized_cmd(self, input_path: Path, output_path: Path) -> list:
+    def _get_optimized_cmd(self, input_path: Path, output_path: Path, infilter: Optional[str] = None) -> list:
         """
         Возвращает оптимизированную команду LibreOffice для конвертации в формат по расширению output_path.
         Использует изолированный пользовательский профиль и параметры, ускоряющие
@@ -253,9 +256,13 @@ class LibreOfficeManager(QObject):
             '--nodefault',          # Не загружать документ по умолчанию
         ]
 
+        if infilter:
+            cmd.append(f'--infilter={infilter}')
         # Формат — по расширению результата: pdf, doc, odt, rtf, ppt, odp, xls…
+        # TXT — всегда в UTF-8: по умолчанию LibreOffice пишет в кодировке системы, и на Windows кириллица пропадает
+        target = output_path.suffix.lstrip('.').lower()
         cmd.extend([
-            '--convert-to', output_path.suffix.lstrip('.').lower(),
+            '--convert-to', 'txt:Text (encoded):UTF8' if target == 'txt' else target,
             '--outdir', str(output_path.parent),
             str(input_path)
         ])
@@ -564,7 +571,8 @@ class LibreOfficeManager(QObject):
             middle = Path(tmp) / f"{output_path.stem}{middle_ext}"
             return make(middle) and self.convert(middle, output_path)
 
-    def convert(self, input_path: Path, output_path: Path, progress_callback=None) -> bool:
+    def convert(self, input_path: Path, output_path: Path, progress_callback=None,
+                infilter: Optional[str] = None) -> bool:
         """
         Конвертирует документ через LibreOffice в формат по расширению output_path (pdf, doc, odt, xls…).
         Выполняет блокирующий вызов — должен использоваться в QThread (например, через JobManager).
@@ -582,7 +590,7 @@ class LibreOfficeManager(QObject):
             return False
 
         try:
-            cmd = self._get_optimized_cmd(input_path, output_path)
+            cmd = self._get_optimized_cmd(input_path, output_path, infilter)
             logger.info(f"Запуск оптимизированной конвертации: {' '.join(cmd)}")
 
             result = subprocess.run(

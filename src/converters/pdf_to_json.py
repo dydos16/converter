@@ -4,6 +4,7 @@ PDF to JSON - извлечение данных из PDF
 import json
 from pathlib import Path
 from .base import BaseConverter
+from .pdf_text import page_text
 from loguru import logger
 
 
@@ -28,6 +29,8 @@ class PdfToJsonConverter(BaseConverter):
         return ['json']
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        if not self._require_text_layer(input_path):
+            return False
         try:
             self._update_status("Извлечение данных из PDF...")
             self._update_progress(10)
@@ -55,7 +58,7 @@ class PdfToJsonConverter(BaseConverter):
 
                 page_data = {
                     "page_number": page_num + 1,
-                    "text": page.get_text(),
+                    "text": page_text(page),
                     "words": page.get_text("words"),
                     "size": [page.rect.width, page.rect.height]
                 }

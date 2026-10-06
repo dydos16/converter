@@ -3,6 +3,7 @@ PDF to HTML - конвертация PDF в HTML
 """
 from pathlib import Path
 from .base import BaseConverter
+from .pdf_text import page_text
 from loguru import logger
 
 
@@ -27,6 +28,8 @@ class PdfToHtmlConverter(BaseConverter):
         return ['html']
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
+        if not self._require_text_layer(input_path):
+            return False
         try:
             self._update_status("Конвертация PDF в HTML...")
             self._update_progress(10)
@@ -59,7 +62,7 @@ class PdfToHtmlConverter(BaseConverter):
                 self._update_progress(30 + int((page_num / len(doc)) * 60))
 
                 page = doc[page_num]
-                text = page.get_text()
+                text = page_text(page)
 
                 html_content.append(f'<div class="page">')
                 html_content.append(f'<h2>Page {page_num + 1}</h2>')

@@ -2,9 +2,26 @@
 Конвертер изображений с поддержкой различных форматов
 """
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 from .base import BaseConverter
 from loguru import logger
+
+
+def fit_mode(img: Image.Image, output_format: str) -> Image.Image:
+    """Приводит картинку к режиму, который умеет записать формат."""
+    has_alpha = img.mode in ('RGBA', 'LA', 'PA') or 'transparency' in img.info
+    if output_format in ('jpg', 'jpeg'):
+        if has_alpha:
+            # У JPEG нет прозрачности: подкладываем белый фон (иначе прозрачное становится чёрным)
+            rgba = img.convert('RGBA')
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(rgba, mask=rgba.getchannel('A'))
+            return background
+        return img if img.mode in ('RGB', 'L', 'CMYK') else img.convert('RGB')
+    # PNG/WebP/BMP/GIF не пишут CMYK, 16-битные и прочие редкие режимы
+    if img.mode in ('1', 'L', 'P', 'RGB', 'RGBA'):
+        return img
+    return img.convert('RGBA' if has_alpha else 'RGB')
 
 
 class ImageConverter(BaseConverter):
@@ -39,21 +56,12 @@ class ImageConverter(BaseConverter):
             self._update_status("Открытие изображения...")
             self._update_progress(10)
 
-            with Image.open(input_path) as img:
-                self._update_progress(30)
-
-                # Конвертируем RGBA в RGB для JPEG
+            with Image.open(input_path) as source:
+                # Фото с телефона хранят поворот в EXIF: применяем его, иначе снимок ляжет на бок
+                img = ImageOps.exif_transpose(source)
                 output_format = output_path.suffix.lower().lstrip('.')
-                if output_format in ['jpg', 'jpeg']:
-                    if img.mode == 'RGBA':
-                        self._update_status("Конвертация цветового пространства...")
-                        background = Image.new('RGB', img.size, (255, 255, 255))
-                        background.paste(img, mask=img.split()[3] if len(img.split()) > 3 else None)
-                        img = background
-                    elif img.mode not in ('RGB', 'L'):
-                        # GIF/P и другие палитровые режимы -> RGB (иначе JPEG не может записать)
-                        self._update_status("Конвертация цветового пространства...")
-                        img = img.convert('RGB')
+                img = fit_mode(img, output_format)
+                self._update_progress(30)
 
                 # Изменяем размер если нужно
                 if self.max_width or self.max_height:
@@ -73,6 +81,14 @@ class ImageConverter(BaseConverter):
                     save_kwargs['quality'] = self.quality
                 elif output_format == 'png':
                     save_kwargs['compress_level'] = 6
+                if output_format in ('jpg', 'jpeg', 'png', 'webp', 'tiff'):
+                    # Дата съёмки, камера и цветовой профиль (iPhone снимает в Display P3) — переносим.
+                    # Профиль годится, только если цветовой режим не поменялся
+                    exif = img.getexif()
+                    if exif:
+                        save_kwargs['exif'] = exif
+                    if img.mode == source.mode and source.info.get('icc_profile'):
+                        save_kwargs['icc_profile'] = source.info['icc_profile']
 
                 self._update_status(f"Сохранение в {output_format.upper()}...")
                 img.save(output_path, **save_kwargs)
