@@ -1,17 +1,17 @@
 """
 PDF to PPTX - конвертация PDF в презентацию PowerPoint через преобразование в изображения
 """
-import subprocess
-import shutil
 import tempfile
 from pathlib import Path
-from PIL import Image
 from .base import BaseConverter
 from loguru import logger
 
+EMU_PER_PT = 12700                  # единицы PowerPoint в одном типографском пункте
+MAX_SLIDE_PT = 56 * 72              # PowerPoint не принимает слайды больше 56 дюймов
+
 
 class PdfToPptxConverter(BaseConverter):
-    """Конвертер PDF в PPTX через преобразование страниц в изображения"""
+    """Конвертер PDF в PPTX: каждая страница — картинка на своём слайде"""
 
     def __init__(self):
         super().__init__()
@@ -22,34 +22,7 @@ class PdfToPptxConverter(BaseConverter):
         return ['pdf']
 
     def get_output_formats(self):
-        return ['pptx', 'ppt']
-
-    def _check_pdf2image(self):
-        try:
-            from pdf2image import convert_from_path
-            return True
-        except ImportError:
-            return False
-
-    def _check_python_pptx(self):
-        try:
-            from pptx import Presentation
-            return True
-        except ImportError:
-            return False
-
-    def _check_poppler(self):
-        import shutil
-        import platform
-
-        system = platform.system().lower()
-
-        if system == 'darwin':
-            return shutil.which('pdfinfo') is not None
-        elif system == 'windows':
-            return shutil.which('pdftoppm') is not None
-        else:
-            return shutil.which('pdfinfo') is not None
+        return ['pptx', 'ppt', 'odp']
 
     def convert(self, input_path: Path, output_path: Path) -> bool:
         # ppt/odp писать сами не умеем: делаем PPTX и пересохраняем через LibreOffice
@@ -57,89 +30,39 @@ class PdfToPptxConverter(BaseConverter):
             from src.core.libreoffice_manager import LibreOfficeManager
             return LibreOfficeManager().convert_via(lambda pptx: self.convert(input_path, pptx), output_path, '.pptx')
         try:
-            self._update_status("Проверка зависимостей...")
-            self._update_progress(10)
-
-            # Проверяем poppler
-            if not self._check_poppler():
-                error_msg = (
-                    "Для конвертации PDF в PPTX необходимо установить poppler:\n\n"
-                    "- macOS: brew install poppler\n"
-                    "- Windows: скачайте poppler и добавьте в PATH\n"
-                    "  https://github.com/oschwartz10612/poppler-windows/releases/\n"
-                    "- Linux: sudo apt-get install poppler-utils"
-                )
-                self._handle_error(error_msg)
-                return False
-
-            # Проверяем pdf2image
-            if not self._check_pdf2image():
-                self._handle_error("Установите pdf2image: pip install pdf2image")
-                return False
-
-            # Проверяем python-pptx
-            if not self._check_python_pptx():
-                self._handle_error("Установите python-pptx: pip install python-pptx")
-                return False
-
-            from pdf2image import convert_from_path
+            # Страницы рисует PyMuPDF — он уже в приложении, внешний poppler не нужен
+            import fitz
             from pptx import Presentation
-            from pptx.util import Inches
 
             self._update_status(f"Конвертация PDF в изображения (DPI={self.dpi})...")
-            self._update_progress(20)
+            self._update_progress(10)
 
-            # Конвертируем PDF в изображения
-            images = convert_from_path(
-                str(input_path),
-                dpi=self.dpi,
-                fmt='png'
-            )
+            with fitz.open(input_path) as doc, tempfile.TemporaryDirectory() as tmp:
+                total_pages = len(doc)
+                prs = Presentation()
+                # Слайд — по пропорциям первой страницы, иначе A4 растягивается в 16:9
+                first = doc[0].rect
+                k = min(1.0, MAX_SLIDE_PT / max(first.width, first.height))
+                prs.slide_width = int(first.width * k * EMU_PER_PT)
+                prs.slide_height = int(first.height * k * EMU_PER_PT)
 
-            total_pages = len(images)
-            self._update_status(f"Создание презентации с {total_pages} слайдами...")
-            self._update_progress(40)
+                for i, page in enumerate(doc):
+                    self._update_progress(10 + int(i / total_pages * 85))
+                    self._update_status(f"Слайд {i + 1}/{total_pages}")
+                    png = Path(tmp) / f"{i}.png"
+                    page.get_pixmap(dpi=self.dpi).save(png)
+                    # Страница целиком и без искажений: вписываем по центру, сохраняя пропорции
+                    scale = min(prs.slide_width / page.rect.width, prs.slide_height / page.rect.height)
+                    w, h = int(page.rect.width * scale), int(page.rect.height * scale)
+                    slide = prs.slides.add_slide(prs.slide_layouts[6])
+                    slide.shapes.add_picture(str(png), (prs.slide_width - w) // 2, (prs.slide_height - h) // 2, w, h)
 
-            # Создаем презентацию
-            prs = Presentation()
-            prs.slide_width = Inches(10)
-            prs.slide_height = Inches(5.625)
-
-            for i, img in enumerate(images):
-                # Обновляем прогресс каждые 10% или каждую страницу
-                progress = 40 + int((i / total_pages) * 55)
-                self._update_progress(progress)
-                self._update_status(f"Слайд {i+1}/{total_pages}")
-
-                # Добавляем слайд
-                slide_layout = prs.slide_layouts[6]
-                slide = prs.slides.add_slide(slide_layout)
-
-                # Сохраняем изображение во временный файл
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    img.save(tmp.name, 'PNG')
-                    tmp_path = tmp.name
-
-                # Добавляем изображение на слайд
-                slide.shapes.add_picture(
-                    tmp_path,
-                    Inches(0),
-                    Inches(0),
-                    width=prs.slide_width,
-                    height=prs.slide_height
-                )
-
-                # Удаляем временный файл
-                Path(tmp_path).unlink()
-
-            # Сохраняем презентацию
-            self._update_status("Сохранение презентации...")
-            self._update_progress(95)
-            prs.save(str(output_path))
+                self._update_status("Сохранение презентации...")
+                self._update_progress(95)
+                prs.save(str(output_path))
 
             self._update_progress(100)
             self._update_status(f"Конвертация завершена! Создано {total_pages} слайдов")
-
             return True
 
         except Exception as e:
