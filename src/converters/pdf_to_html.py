@@ -1,6 +1,7 @@
 """
 PDF to HTML - конвертация PDF в HTML
 """
+import html
 from pathlib import Path
 from .base import BaseConverter
 from .pdf_text import page_text
@@ -49,7 +50,7 @@ class PdfToHtmlConverter(BaseConverter):
             html_content.append('<html>')
             html_content.append('<head>')
             html_content.append('<meta charset="UTF-8">')
-            html_content.append('<title>' + input_path.stem + '</title>')
+            html_content.append('<title>' + html.escape(input_path.stem) + '</title>')
             html_content.append('<style>')
             html_content.append('body { font-family: Arial, sans-serif; margin: 40px; }')
             html_content.append('.page { margin-bottom: 40px; border-bottom: 1px solid #ccc; }')
@@ -67,7 +68,8 @@ class PdfToHtmlConverter(BaseConverter):
                 html_content.append(f'<div class="page">')
                 html_content.append(f'<h2>Page {page_num + 1}</h2>')
                 html_content.append(f'<div class="content">')
-                html_content.append(text.replace('\n', '<br>'))
+                # «<», «&» из PDF — текст, а не разметка: иначе «a < b» ломает страницу, а <script> из PDF исполнится
+                html_content.append(html.escape(text).replace('\n', '<br>'))
                 html_content.append(f'</div>')
                 html_content.append(f'<div class="page-number">Page {page_num + 1}</div>')
                 html_content.append(f'</div>')

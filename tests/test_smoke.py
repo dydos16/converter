@@ -335,7 +335,22 @@ def test_libreoffice_failure_is_explained():
     assert len(calls) == 1
 
 
+def test_pdf_text_is_escaped_in_html():
+    """«a < b» из PDF ломал HTML-страницу, а <script> из PDF исполнялся в браузере."""
+    import tempfile
+    import fitz
+    from src.converters.pdf_to_html import PdfToHtmlConverter
+    d = Path(tempfile.mkdtemp())
+    doc = fitz.open()
+    doc.new_page().insert_text((50, 100), 'a < b & <script>alert(1)</script>', fontname="helv")
+    doc.save(d / "x.pdf")
+    assert PdfToHtmlConverter().convert(d / "x.pdf", d / "x.html")
+    page = (d / "x.html").read_text(encoding="utf-8")
+    assert "<script>" not in page and "a &lt; b &amp; &lt;script&gt;" in page
+
+
 if __name__ == "__main__":
+    test_pdf_text_is_escaped_in_html()
     test_libreoffice_failure_is_explained()
     test_closing_during_libreoffice_download_does_not_crash()
     test_csv_opens_in_local_excel()
