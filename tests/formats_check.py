@@ -538,14 +538,66 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
             target = get_unique_filename(out_dir / "отчёт.pdf", taken)
             taken.add(target)
             jobs.append((dept, src, target))
-        threads = [threading.Thread(target=run, args=(src, target)) for _, src, target in jobs]
+        results, logs = {}, []
+        sink = logger.add(lambda m: logs.append(m.record["message"]), level="WARNING")   # что скажет LibreOffice
+        threads = [threading.Thread(target=lambda j=job: results.__setitem__(j[0], run(j[1], j[2]))) for job in jobs]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        wrong = [f"{target.name}: ждали отдел {dept}" for dept, _, target in jobs
+        logger.remove(sink)
+        for message in logs:
+            if "код 81" in message:
+                print(f"   (LibreOffice: {message})", flush=True)
+        wrong = [f"{target.name}: ждали отдел {dept}" + ("" if target.exists() else " — файла нет")
+                 for dept, _, target in jobs
                  if f"Отчёт отдела {dept}" not in (text_of(target, "pdf") if target.exists() else "")]
-        return None if not wrong else "; ".join(wrong)
+        if not wrong:
+            return None
+        return "; ".join(wrong) + f" | итоги задач: {results} | журнал: {' / '.join(logs)[-700:]}"
+
+    def broken_inputs():
+        import os
+        from src.core.job_manager import ConversionJob, JobManager
+        jm, bad, folder = JobManager(), [], d / "битые"
+        folder.mkdir()
+        for name, data, dst, expect in (
+                ("пустой.docx", b"", "pdf", "пустой"), ("пустой.png", b"", "jpg", "пустой"),
+                ("мусор.docx", os.urandom(3000), "pdf", "повреждён"), ("мусор.xlsx", os.urandom(3000), "csv", "повреждён"),
+                ("мусор.pptx", os.urandom(3000), "pdf", "повреждён"), ("мусор.pdf", os.urandom(3000), "txt", "повреждён"),
+                ("мусор.png", os.urandom(3000), "jpg", "не картинка")):
+            src = folder / name
+            src.write_bytes(data)
+            job = ConversionJob(name, src, folder / f"итог {name}.{dst}", src.suffix.lstrip("."), dst)
+            jm._process_job(job)                        # как в приложении: через очередь задач
+            if job.status.name != "FAILED" or expect not in job.error_message:
+                bad.append(f"{name}: {job.status.name} «{job.error_message[:70]}»")
+        gone = ConversionJob("gone", folder / "удалённый.docx", folder / "x.pdf", "docx", "pdf")
+        jm._process_job(gone)
+        if "не найден" not in gone.error_message:
+            bad.append(f"удалённый файл: «{gone.error_message}»")
+        return None if not bad else "; ".join(bad)
+
+    def terminal_log_txt():
+        src = d / "build log.txt"
+        src.write_text("\x1b[32mOK\x1b[0m Сборка прошла\n\x00Ошибок нет\x07\n", encoding="utf-8")
+        out = d / "build log.docx"
+        ok, err = run(src, out)
+        if not ok:
+            return why(err)
+        text = text_of(out, "docx") or ""
+        return None if "OK Сборка прошла" in text and "Ошибок нет" in text else f"текст: {text!r}"
+
+    def odd_file_name():
+        import unicodedata
+        # Знаки, которые LibreOffice понимает как части адреса, и «й» в разложенной форме, как бывает на Mac
+        src = d / unicodedata.normalize("NFD", "Отчёт #1 (копия) 100% & «итог»; й.docx")
+        shutil.copy(files["docx"], src)
+        out = d / "odd name.pdf"
+        ok, err = run(src, out)
+        if not ok:
+            return why(err)
+        return None if "Привет, конвертер!" in re.sub(r"\s+", " ", text_of(out, "pdf") or "") else "в PDF нет текста"
 
     def multipage_tiff():
         pages = [Image.new("RGB", (200, 100), c) for c in ((200, 0, 0), (0, 200, 0), (0, 0, 200))]
@@ -655,6 +707,9 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         ("XLSX с несколькими листами → CSV на каждый лист", sheets_to_csv),
         ("«Макс. ширина» уменьшает картинку (и HEIC)", image_max_size),
         ("Таблица без рамок → XLSX (режим stream)", borderless_table),
+        ("Пустые, испорченные и удалённые файлы: понятная ошибка, а не «успех»", broken_inputs),
+        ("TXT с кодами цветов терминала → DOCX", terminal_log_txt),
+        ("Имя с #, %, &, «» и «й» как на Mac → PDF через LibreOffice", odd_file_name),
     ]
 
 

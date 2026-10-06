@@ -6,6 +6,7 @@ import sys
 import tempfile
 import shutil
 import platform
+import zipfile
 from pathlib import Path
 from typing import Optional
 import subprocess
@@ -111,6 +112,26 @@ def get_file_size_str(path: Path) -> str:
     except OSError:
         return "размер неизвестен"
     return format_size(size)
+
+
+ZIP_FORMATS = {"docx", "pptx", "ppsx", "xlsx", "odt", "odp", "ods"}       # внутри — всегда zip-архив
+
+
+def input_problem(path: Path) -> Optional[str]:
+    """Почему файл не сконвертировать ещё до начала: его нет, он пустой или повреждён. None — можно."""
+    path = Path(path)
+    if not path.exists():
+        return f"Файл не найден: {path.name} — его переместили или удалили."
+    if path.stat().st_size == 0:
+        return f"Файл пустой: {path.name}."
+    ext = path.suffix.lower().lstrip(".")
+    if ext in ZIP_FORMATS and not zipfile.is_zipfile(path):
+        # LibreOffice открыл бы такой файл как текст и «успешно» выдал бы абракадабру
+        return f"Файл повреждён или это не {ext.upper()}: {path.name}."
+    if ext == "pdf":
+        from src.converters.pdf_text import pdf_problem
+        return pdf_problem(path)
+    return None
 
 
 def read_text_any(path: Path) -> str:

@@ -620,22 +620,31 @@ class LibreOfficeManager(QObject):
                 cmd = self._get_optimized_cmd(input_path, output_path, infilter, Path(workdir))
                 logger.info(f"Запуск оптимизированной конвертации: {' '.join(cmd)}")
 
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    stdin=subprocess.DEVNULL,
-                )
+                for _ in range(2):
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
+                        stdin=subprocess.DEVNULL,
+                    )
+                    # 81 — LibreOffice доделал первый запуск на новом профиле и просит перезапуск, ничего
+                    # не сконвертировав. Повторяем один раз
+                    if result.returncode != 81:
+                        break
+                    logger.warning("LibreOffice попросил перезапуск (код 81, новый профиль) — повторяем")
 
                 if result.returncode != 0:
-                    logger.error(f"LibreOffice ошибка: {result.stderr}")
+                    logger.error(f"LibreOffice ошибка (код {result.returncode}): {result.stderr}")
                     self._report_missing_libraries(result.stderr)
                     return False
 
-                made = Path(workdir) / f"{input_path.stem}.{output_path.suffix.lstrip('.').lower()}"
-                if not made.exists():
-                    logger.error(f"LibreOffice не создал {made.name}")
+                # Во временной папке результат — единственный файл. Имя не угадываем: необычные символы
+                # или другую форму Юникода (на Mac так бывает) LibreOffice мог записать по-своему
+                fmt = output_path.suffix.lstrip('.').lower()
+                made = next(Path(workdir).glob(f"*.{fmt}"), None)
+                if made is None:
+                    logger.error(f"LibreOffice не создал .{fmt}: {(result.stdout + result.stderr).strip()[-400:]}")
                     return False
                 shutil.copyfile(made, output_path)
                 logger.info(f"Конвертация успешна: {output_path}")

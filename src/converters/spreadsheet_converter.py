@@ -53,6 +53,9 @@ class SpreadsheetConverter(BaseConverter):
                     return lo.convert(input_path, xlsx) and self._xlsx_to_csv(xlsx, output_path)
             return lo.convert(input_path, output_path)      # xlsx ↔ xls, таблица → PDF
 
+        except csv.Error:
+            self._handle_error(f"Не удалось разобрать CSV — файл повреждён или это не таблица: {input_path.name}.")
+            return False
         except Exception as e:
             self._handle_error(f"Ошибка конвертации таблицы: {str(e)}")
             logger.exception("Ошибка конвертации таблицы")

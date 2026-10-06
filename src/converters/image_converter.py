@@ -4,7 +4,7 @@
 import io
 import zipfile
 from pathlib import Path
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, UnidentifiedImageError
 from .base import BaseConverter
 from loguru import logger
 
@@ -116,6 +116,9 @@ class ImageConverter(BaseConverter):
 
                 return True
 
+        except UnidentifiedImageError:
+            self._handle_error(f"Файл повреждён или это не картинка: {input_path.name}.")
+            return False
         except Exception as e:
             self._handle_error(f"Ошибка конвертации изображения: {str(e)}")
             return False

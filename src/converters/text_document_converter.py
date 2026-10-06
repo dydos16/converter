@@ -2,6 +2,7 @@
 Конвертер текстовых документов (odt, rtf, txt) через LibreOffice; TXT → DOCX — сами.
 TXT бывает в UTF-8 или в Windows-1251 (старый Блокнот): кодировку определяем сами — LibreOffice угадывает её плохо.
 """
+import re
 import tempfile
 from pathlib import Path
 from .base import BaseConverter
@@ -47,6 +48,9 @@ class TextDocumentConverter(BaseConverter):
         from docx import Document
 
         self._update_status("Создание DOCX документа...")
+        # Коды цветов терминала (логи) и прочие управляющие символы Word хранить не умеет — убираем
+        text = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
         doc = Document()
         for line in text.splitlines():
             doc.add_paragraph(line)
