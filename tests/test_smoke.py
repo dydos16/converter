@@ -349,7 +349,22 @@ def test_pdf_text_is_escaped_in_html():
     assert "<script>" not in page and "a &lt; b &amp; &lt;script&gt;" in page
 
 
+def test_utf16_text_and_csv_are_read():
+    """«Текст Юникод» из Excel и вывод PowerShell «> файл.txt» — UTF-16: были кашей и «CSV повреждён»."""
+    import tempfile
+    from openpyxl import load_workbook
+    from src.converters.spreadsheet_converter import SpreadsheetConverter
+    from src.utils.helpers import read_text_any
+    d = Path(tempfile.mkdtemp())
+    (d / "ps.txt").write_bytes("Привет, конвертер!\r\n".encode("utf-16"))
+    assert read_text_any(d / "ps.txt") == "Привет, конвертер!\r\n"
+    (d / "excel.csv").write_bytes("Товар\tКол-во\r\nяблоко\t10\r\n".encode("utf-16"))
+    assert SpreadsheetConverter().convert(d / "excel.csv", d / "excel.xlsx")
+    assert list(load_workbook(d / "excel.xlsx").active.iter_rows(values_only=True))[1] == ("яблоко", 10)
+
+
 if __name__ == "__main__":
+    test_utf16_text_and_csv_are_read()
     test_pdf_text_is_escaped_in_html()
     test_libreoffice_failure_is_explained()
     test_closing_during_libreoffice_download_does_not_crash()

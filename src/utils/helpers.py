@@ -192,6 +192,9 @@ def open_folder(folder) -> None:
 def read_text_any(path: Path) -> str:
     """Текст файла в UTF-8 (с BOM или без) или в Windows-1251 — так сохраняют русский Excel и старый Блокнот."""
     data = Path(path).read_bytes()
+    # UTF-16 с BOM: «Текст Юникод» из Excel, Блокнот «Юникод», вывод PowerShell «> файл.txt»
+    if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return data.decode("utf-16")
     for encoding in ("utf-8-sig", "cp1251"):
         try:
             return data.decode(encoding)
