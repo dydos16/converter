@@ -154,7 +154,25 @@ def test_dropped_folder_skips_service_files():
     assert [p.name for p in MainWindow._files_in(folder)] == sorted(["фото.jpg", "СКАН.PNG"])
 
 
+def test_read_only_folder_is_detected():
+    """Папка без прав на запись: одна понятная ошибка до начала, а не «Permission denied» на каждый файл."""
+    import os
+    import stat
+    import sys
+    import tempfile
+    from src.utils.helpers import folder_writable
+    folder = Path(tempfile.mkdtemp())
+    assert folder_writable(folder)
+    if sys.platform != "win32":                         # на Windows chmod не снимает права на папку
+        os.chmod(folder, stat.S_IRUSR | stat.S_IXUSR)
+        try:
+            assert not folder_writable(folder)
+        finally:
+            os.chmod(folder, stat.S_IRWXU)
+
+
 if __name__ == "__main__":
+    test_read_only_folder_is_detected()
     test_dropped_folder_skips_service_files()
     test_interrupted_libreoffice_install_is_not_used()
     test_slow_libreoffice_start_is_not_unavailable()

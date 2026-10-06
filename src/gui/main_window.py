@@ -24,7 +24,7 @@ from src.gui.glass import (
     TabBar, FadeStack, FileList, Toast, GlassPopup, InsetSection, Row, SliderRow, PageHeader,
     PROGRESS_ROLE, META_ROLE,
 )
-from src.utils.helpers import get_file_size_str, get_unique_filename, ensure_output_directory
+from src.utils.helpers import get_file_size_str, get_unique_filename, ensure_output_directory, folder_writable
 from loguru import logger
 
 
@@ -654,8 +654,13 @@ class MainWindow(QMainWindow):
     def add_paths(self, paths):
         """Добавляет много файлов, пересчитывая состояние списка один раз."""
         self.file_list.setUpdatesEnabled(False)
+        # Тот же файл второй раз (перетащили снова) не добавляем: он сконвертировался бы дважды — «фото (1).jpg»
+        seen = {self.file_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.file_list.count())}
         try:
             for path in paths:
+                if str(path) in seen:
+                    continue
+                seen.add(str(path))
                 self.add_file_to_list(path, refresh=False)
         finally:
             self.file_list.setUpdatesEnabled(True)
@@ -801,6 +806,11 @@ class MainWindow(QMainWindow):
         )
 
         if not output_dir:
+            return
+        # Иначе каждый файл упадёт с «[Errno 13] Permission denied: …»
+        if not folder_writable(Path(output_dir)):
+            self.show_warning_signal.emit(
+                "Ошибка", f"Нет прав на запись в папку «{Path(output_dir).name}». Выберите другую папку.")
             return
 
         self.settings.set('output_directory', output_dir)

@@ -154,6 +154,15 @@ def input_problem(path: Path) -> Optional[str]:
     return None
 
 
+def folder_writable(folder: Path) -> bool:
+    """Можно ли писать в папку. Пробуем создать файл: os.access на Windows про папки врёт."""
+    try:
+        with tempfile.TemporaryFile(dir=folder):
+            return True
+    except OSError:
+        return False
+
+
 def read_text_any(path: Path) -> str:
     """Текст файла в UTF-8 (с BOM или без) или в Windows-1251 — так сохраняют русский Excel и старый Блокнот."""
     data = Path(path).read_bytes()

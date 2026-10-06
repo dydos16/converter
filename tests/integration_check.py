@@ -100,6 +100,7 @@ def main() -> int:
         w.settings.settings['image_max_width'] = 32     # «Макс. ширина» в настройках
         w.input_format_combo.setCurrentText("pdf")      # формат, оставшийся с прошлого сеанса
         w.add_paths(src)
+        w.add_paths(src[:2])                            # те же файлы перетащили ещё раз — дублей быть не должно
         w.output_format_combo.setCurrentText("jpg")
         w.start_conversion()
         done = wait(app, 60, lambda: all(w.file_list.item(i).data(PROGRESS_ROLE) in (100, -1)
