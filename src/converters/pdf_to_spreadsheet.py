@@ -116,8 +116,9 @@ class PdfToSpreadsheetConverter(BaseConverter):
         try:
             if output_ext == 'csv':
                 import csv
+                from .spreadsheet_converter import excel_csv_delimiter
                 with open(output_path, 'w', encoding='utf-8-sig', newline='') as f:   # BOM — для русского Excel
-                    writer = csv.writer(f)
+                    writer = csv.writer(f, delimiter=excel_csv_delimiter())
                     for row in rows:
                         writer.writerow(row)
                 return True

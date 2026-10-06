@@ -7,6 +7,7 @@ import csv
 import io
 import re
 import tempfile
+from datetime import datetime, time
 from pathlib import Path
 from .base import BaseConverter
 from loguru import logger
@@ -16,6 +17,26 @@ EXCEL_MAX_ROWS = 1_048_576          # больше строк в лист Excel 
 # Символы, которые нельзя хранить в ячейке (то же, что openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE;
 # сам openpyxl здесь не импортируем — модуль грузится при запуске окна)
 ILLEGAL_CHARACTERS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def excel_csv_delimiter() -> str:
+    """
+    Разделитель, которого ждёт Excel этой системы. Где дробную часть пишут через запятую (Россия), Excel
+    открывает CSV по «;»: с «,» вся таблица ложится в один столбец, а «1.5» он читает как 1 мая.
+    """
+    # ponytail: судим по десятичному знаку, а не по «Разделителю элементов списка» Windows — он почти всегда
+    # ему парный; читать его через GetLocaleInfo, если кто-то настроит их вразнобой
+    from PySide6.QtCore import QLocale
+    return ";" if QLocale.system().decimalPoint() == "," else ","
+
+
+def _csv_value(value, comma: bool):
+    """Ячейка для CSV: дата — без «00:00:00», дробь — через запятую, если так пишут в системе."""
+    if isinstance(value, datetime) and value.time() == time():
+        return value.date()
+    if comma and isinstance(value, float):
+        return str(value).replace('.', ',')
+    return value
 
 
 def _cell(value: str):
@@ -103,13 +124,17 @@ class SpreadsheetConverter(BaseConverter):
         # Пустые листы («Лист2», «Лист3» из старых шаблонов) пропускаем
         sheets = [ws for ws in wb.worksheets
                   if any(v is not None for row in ws.iter_rows(values_only=True) for v in row)]
+        delimiter = excel_csv_delimiter()
+        comma = delimiter == ';'                                  # дробная часть — через запятую
         for n, ws in enumerate(sheets or wb.worksheets[:1]):
             title = re.sub(r'[<>:"/\\|?*]', '_', ws.title)        # недопустимое в именах файлов Windows
             target = output_path if n == 0 else \
                 get_unique_filename(output_path.with_name(f"{output_path.stem} - {title}.csv"))
             # С BOM: без него русский Excel откроет UTF-8 кракозябрами
             with open(target, 'w', encoding='utf-8-sig', newline='') as f:
-                csv.writer(f).writerows(ws.iter_rows(values_only=True))
+                csv.writer(f, delimiter=delimiter).writerows(
+                    [_csv_value(v, comma) for v in row]
+                    for row in ws.iter_rows(values_only=True))
         wb.close()
         self._update_progress(100)
         return True

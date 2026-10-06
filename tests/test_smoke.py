@@ -259,7 +259,31 @@ def test_busy_libreoffice_profile_falls_back_to_own_profile():
     assert len(profiles) == 2 and profiles[0] != profiles[1]
 
 
+def test_csv_opens_in_local_excel():
+    """Русский Excel открывает CSV по «;», а «1.5» читает как 1 мая: пишем CSV так, как ждёт Excel системы."""
+    import tempfile
+    from datetime import datetime
+    from unittest import mock
+    from openpyxl import Workbook
+    from PySide6.QtCore import QLocale
+    from src.converters import spreadsheet_converter as sc
+    from src.converters.pdf_to_spreadsheet import PdfToSpreadsheetConverter
+    assert QLocale(QLocale.Language.Russian, QLocale.Country.Russia).decimalPoint() == ","
+    d = Path(tempfile.mkdtemp())
+    wb = Workbook()
+    wb.active.append(["товар", "цена", "шт", "дата"])
+    wb.active.append(["яблоко", 1.5, 3, datetime(2026, 10, 7)])         # дата — без «00:00:00»
+    wb.save(d / "t.xlsx")
+    for delimiter, line in ((";", "яблоко;1,5;3;2026-10-07"), (",", "яблоко,1.5,3,2026-10-07")):
+        with mock.patch.object(sc, "excel_csv_delimiter", return_value=delimiter):
+            assert sc.SpreadsheetConverter().convert(d / "t.xlsx", d / f"t{delimiter}.csv")
+            assert PdfToSpreadsheetConverter()._save_rows([["а", "б"]], d / f"p{delimiter}.csv", "csv")
+        assert (d / f"t{delimiter}.csv").read_text(encoding="utf-8-sig").splitlines()[1] == line
+        assert (d / f"p{delimiter}.csv").read_text(encoding="utf-8-sig").strip() == f"а{delimiter}б"
+
+
 if __name__ == "__main__":
+    test_csv_opens_in_local_excel()
     test_busy_libreoffice_profile_falls_back_to_own_profile()
     test_failed_conversion_leaves_no_partial_file()
     test_external_programs_get_system_environment()
