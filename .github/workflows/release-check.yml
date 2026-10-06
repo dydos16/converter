@@ -1,0 +1,141 @@
+name: Release check
+
+# Проверка опубликованного релиза глазами пользователя, на чистых Windows и Linux:
+#  • скачиваем файлы из Releases, ставим установщик / распаковываем zip / берём AppImage — самопроверка;
+#  • обычный запуск: приложение само докачивает LibreOffice и не падает;
+#  • этим LibreOffice конвертируем настоящий DOCX → PDF.
+# Системные библиотеки Qt на Linux нарочно не ставим: так всплывёт, если AppImage без них не запустится.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег релиза (пусто — последний)"
+        required: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  TAG: ${{ inputs.tag }}
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Download release
+        shell: bash
+        run: |
+          gh release download $TAG --repo "$GITHUB_REPOSITORY" --pattern '*Windows*' --dir rel
+          ls -l rel
+
+      - name: Installer and zip — self-test
+        shell: pwsh
+        run: |
+          $p = Start-Process rel\FileConverterPro_Windows_Setup.exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER' -Wait -PassThru
+          if ($p.ExitCode) { "Установщик завершился с кодом $($p.ExitCode)"; exit 1 }
+          python -m zipfile -e rel\FileConverterPro_Windows.zip unzipped
+          $fail = 0
+          foreach ($exe in "$env:LOCALAPPDATA\Programs\File Converter Pro\FileConverterPro.exe", "unzipped\FileConverterPro\FileConverterPro.exe") {
+            "=== $exe"
+            $report = Join-Path $env:RUNNER_TEMP "selftest-$((Get-Random)).txt"
+            $r = Start-Process $exe -ArgumentList "--self-test=$report" -PassThru
+            $null = $r.Handle
+            if (-not $r.WaitForExit(300000)) { $r.Kill(); "не завершилась за 5 минут"; $fail = 1; continue }
+            if (Test-Path $report) { Get-Content $report } else { "Отчёта нет — программа упала при запуске" }
+            if ($r.ExitCode) { $fail = 1 }
+          }
+          exit $fail
+
+      - name: First launch — LibreOffice downloads by itself
+        shell: pwsh
+        run: |
+          $app = Start-Process "$env:LOCALAPPDATA\Programs\File Converter Pro\FileConverterPro.exe" -PassThru
+          $root = "$env:LOCALAPPDATA\FileConverterPro"
+          $deadline = (Get-Date).AddMinutes(15); $soffice = $null; $last = -1
+          while ((Get-Date) -lt $deadline -and -not $app.HasExited) {
+            Start-Sleep 15
+            $soffice = Get-ChildItem $root -Recurse -Filter soffice.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $soffice) { continue }
+            # soffice.exe появляется в начале распаковки: готово, когда папка перестала расти
+            $size = (Get-ChildItem $root -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+            if ($size -eq $last) { break }
+            $last = $size; $soffice = $null
+          }
+          $log = "$env:APPDATA\FileConverterPro\logs\app.log"
+          if (Test-Path $log) { "--- лог приложения:"; Get-Content $log | Select-String 'LibreOffice|ERROR|Traceback' | Select-Object -Last 15 | ForEach-Object Line }
+          if ($app.HasExited) { "Приложение закрылось само (код $($app.ExitCode))"; exit 1 }
+          Stop-Process $app
+          if (-not $soffice) { "LibreOffice не появился за 15 минут"; exit 1 }
+          "LibreOffice установлен приложением: $($soffice.FullName)"
+          "SOFFICE=$($soffice.FullName)" >> $env:GITHUB_ENV
+
+      - name: DOCX → PDF with that LibreOffice
+        shell: pwsh
+        run: |
+          pip install -q python-docx
+          python -c "from docx import Document; d = Document(); d.add_heading('Проверка релиза', 0); d.add_paragraph('Привет из File Converter Pro'); d.save('check.docx')"
+          $loProfile = "-env:UserInstallation=file:///$($env:RUNNER_TEMP -replace '\\','/')/lo-profile"
+          Start-Process $env:SOFFICE -ArgumentList '--headless', '--norestore', $loProfile, '--convert-to', 'pdf', '--outdir', 'out', 'check.docx' -Wait -NoNewWindow
+          if (-not (Test-Path out\check.pdf)) { "PDF не получился"; exit 1 }
+          "PDF: $((Get-Item out\check.pdf).Length) байт"
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Download release
+        run: |
+          gh release download $TAG --repo "$GITHUB_REPOSITORY" --pattern '*Linux*' --dir rel
+          chmod +x rel/FileConverterPro_Linux.AppImage
+          ls -l rel
+
+      - name: Virtual screen only (no Qt libraries on purpose)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+
+      - name: AppImage and zip — self-test
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          unzip -q rel/FileConverterPro_Linux.zip -d unzipped
+          fail=0
+          for app in rel/FileConverterPro_Linux.AppImage unzipped/FileConverterPro/FileConverterPro; do
+            echo "=== $app"
+            report=$(mktemp)
+            rc=0
+            timeout 300 xvfb-run -a "$app" --self-test="$report" > out.txt 2>&1 || rc=$?
+            grep -E "qt.qpa|cannot open|Error" out.txt | head -5
+            [ -s "$report" ] && cat "$report" || echo "Отчёта нет — программа упала при запуске (код $rc)"
+            [ "$rc" = 0 ] || fail=1
+          done
+          exit $fail
+
+      - name: First launch — LibreOffice downloads by itself
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+        run: |
+          xvfb-run -a rel/FileConverterPro_Linux.AppImage > app.out 2>&1 &
+          soffice=""
+          for i in $(seq 1 90); do
+            sleep 10
+            pgrep -f FileConverterPro > /dev/null || break
+            soffice=$(find ~/.local/share/FileConverterPro ~/.config/file-converter -path '*program/soffice' 2>/dev/null | head -1)
+            if [ -n "$soffice" ] && "$soffice" --version 2>/dev/null | grep -q LibreOffice; then break; fi
+            soffice=""
+          done
+          log=~/.config/file-converter/logs/app.log
+          [ -f "$log" ] && { echo "--- лог приложения:"; grep -E "LibreOffice|ERROR|Traceback|библиотек" "$log" | tail -15; }
+          if ! pgrep -f FileConverterPro > /dev/null; then echo "Приложение закрылось само:"; tail -20 app.out; exit 1; fi
+          pkill -f FileConverterPro || true
+          [ -n "$soffice" ] || { echo "LibreOffice не появился за 15 минут"; exit 1; }
+          echo "LibreOffice установлен приложением: $soffice"
+          echo "SOFFICE=$soffice" >> "$GITHUB_ENV"
+
+      - name: DOCX → PDF with that LibreOffice
+        run: |
+          pip install -q python-docx
+          python -c "from docx import Document; d = Document(); d.add_heading('Проверка релиза', 0); d.add_paragraph('Привет из File Converter Pro'); d.save('check.docx')"
+          "$SOFFICE" --headless --norestore "-env:UserInstallation=file://$RUNNER_TEMP/lo-profile" --convert-to pdf --outdir out check.docx
+          [ -f out/check.pdf ] || { echo "PDF не получился"; exit 1; }
+          echo "PDF: $(stat -c %s out/check.pdf) байт"

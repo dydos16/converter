@@ -4,8 +4,8 @@ name: Platform check
 #  • smoke-тесты;
 #  • сквозная проверка: окно, конвертация через интерфейс, автоустановка LibreOffice с нуля, DOCX → PDF;
 #  • настоящий экран и настоящая мышь: клики, колёсико, перетаскивание линзы и окна, скриншоты;
-#  • Windows: автоустановка LibreOffice от обычного пользователя без прав администратора;
-#  • Windows: запускается ли выпущенная v1.0.0 (диагностика).
+#  • Windows: автоустановка LibreOffice от обычного пользователя без прав администратора.
+# Опубликованные релизы проверяет release-check.yml.
 on:
   workflow_dispatch:
   push:
@@ -89,26 +89,6 @@ jobs:
           $out.Result
           $err.Result -split "`n" | Select-String -Pattern 'Traceback|Error|msiexec|FAIL' | ForEach-Object { $_.Line }
           exit $p.ExitCode
-
-      - name: Released v1.0.0 — does it start? (diagnostic)
-        continue-on-error: true
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release download v1.0.0 --repo $env:GITHUB_REPOSITORY --pattern '*Windows*' --dir old
-          Expand-Archive (Get-ChildItem old\*.zip | Select-Object -First 1).FullName old\app
-          $exe = Get-ChildItem old\app -Recurse -Filter FileConverterPro.exe | Select-Object -First 1
-          $p = Start-Process $exe.FullName -PassThru
-          Start-Sleep -Seconds 20
-          if ($p.HasExited) {
-            "v1.0.0 закрылась сама через считанные секунды после запуска (код $($p.ExitCode))"
-            $log = "$env:APPDATA\FileConverterPro\logs\app.log"
-            if (Test-Path $log) { Get-Content $log -Tail 20 }
-            exit 1
-          }
-          'v1.0.0 работает 20 секунд после запуска'
-          Stop-Process $p
 
       - name: Upload screenshots
         if: always()
