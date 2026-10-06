@@ -1,9 +1,7 @@
 """
 Главное окно приложения для PySide6
 """
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 from PySide6.QtWidgets import (
@@ -24,7 +22,9 @@ from src.gui.glass import (
     TabBar, FadeStack, FileList, Toast, GlassPopup, InsetSection, Row, SliderRow, PageHeader,
     PROGRESS_ROLE, META_ROLE,
 )
-from src.utils.helpers import get_file_size_str, get_unique_filename, ensure_output_directory, folder_writable
+from src.config.formats import INPUT_EXTENSIONS, format_of
+from src.utils.helpers import (get_file_size_str, get_unique_filename, ensure_output_directory, folder_writable,
+                               open_folder)
 from loguru import logger
 
 
@@ -540,7 +540,7 @@ class MainWindow(QMainWindow):
             self.output_format_combo.clear()
             self.output_format_combo.setEnabled(False)
             self.output_format_combo.addItem("Сначала выберите формат")
-            self.convert_btn.setEnabled(False)
+            self.update_convert_button()        # во время конвертации это «Остановить» — её не гасим
             return
 
         self.output_format_combo.setEnabled(True)
@@ -558,22 +558,6 @@ class MainWindow(QMainWindow):
         self.check_file_formats()
         self.update_convert_button()
 
-    def detect_file_format(self, file_path: Path) -> str:
-        """Определяет формат файла по расширению"""
-        ext = file_path.suffix.lower().lstrip('.')
-
-        supported_formats = {
-            'docx': 'docx', 'doc': 'doc', 'pdf': 'pdf',
-            'pptx': 'pptx', 'ppt': 'ppt', 'pps': 'pps', 'ppsx': 'ppsx',
-            'png': 'png', 'jpg': 'jpg', 'jpeg': 'jpg',
-            'webp': 'webp', 'bmp': 'bmp', 'gif': 'gif', 'tiff': 'tiff',
-            'heic': 'heic', 'heif': 'heif',
-            'xlsx': 'xlsx', 'xls': 'xls', 'csv': 'csv',
-            'odt': 'odt', 'rtf': 'rtf', 'txt': 'txt'
-        }
-
-        return supported_formats.get(ext, ext)
-
     def check_file_formats(self):
         """Проверяет соответствие форматов файлов выбранному формату"""
         input_format = self.input_format_combo.currentText()
@@ -584,7 +568,7 @@ class MainWindow(QMainWindow):
         for i in range(self.file_list.count()):
             item = self.file_list.item(i)
             file_path = Path(item.data(Qt.ItemDataRole.UserRole))
-            ext = file_path.suffix.lower().lstrip('.')
+            ext = format_of(file_path)
 
             if ext != input_format:
                 item.setForeground(RED)
@@ -616,7 +600,7 @@ class MainWindow(QMainWindow):
             for i in range(self.file_list.count()):
                 item = self.file_list.item(i)
                 file_path = Path(item.data(Qt.ItemDataRole.UserRole))
-                ext = file_path.suffix.lower().lstrip('.')
+                ext = format_of(file_path)
                 if ext != input_format:
                     valid_files = False
                     break
@@ -628,7 +612,7 @@ class MainWindow(QMainWindow):
         """Добавляет файлы через диалог"""
         # Фильтр по реальным расширениям: Finder фильтрует сам. С «*.*» Qt проверяет
         # каждый файл папки колбэком в наше приложение — отсюда лаги в окне выбора.
-        patterns = " ".join(f"*.{ext}" for ext in ConverterFactory.get_input_formats())
+        patterns = " ".join(f"*.{ext}" for ext in INPUT_EXTENSIONS)
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Выберите файлы для конвертации",
@@ -670,7 +654,7 @@ class MainWindow(QMainWindow):
 
     def add_file_to_list(self, file_path: Path, refresh: bool = True):
         """Добавляет файл в список"""
-        ext = file_path.suffix.lower().lstrip('.')
+        ext = format_of(file_path)
         if ext not in ConverterFactory.get_input_formats():
             size_str = get_file_size_str(file_path)
             item = QListWidgetItem(file_path.name)
@@ -690,11 +674,9 @@ class MainWindow(QMainWindow):
         # «Из» — по добавленному файлу, если выбран «Все» или в списке нет ни одного файла выбранного формата:
         # формат восстанавливается из прошлого сеанса, и перетащенные PNG иначе «не подходят по формату»
         if ext != current_format and (current_format in ('Все', '') or not self._has_files_of(current_format)):
-            detected_format = self.detect_file_format(file_path)
-            if detected_format in ConverterFactory.get_input_formats():
-                index = self.input_format_combo.findText(detected_format)
-                if index >= 0:
-                    self.input_format_combo.setCurrentIndex(index)
+            index = self.input_format_combo.findText(ext)
+            if index >= 0:
+                self.input_format_combo.setCurrentIndex(index)
 
         if refresh:
             self.check_file_formats()
@@ -702,7 +684,7 @@ class MainWindow(QMainWindow):
             self.update_file_count()
 
     def _has_files_of(self, fmt: str) -> bool:
-        return any(Path(self.file_list.item(i).data(Qt.ItemDataRole.UserRole)).suffix.lower().lstrip('.') == fmt
+        return any(format_of(self.file_list.item(i).data(Qt.ItemDataRole.UserRole)) == fmt
                    for i in range(self.file_list.count()))
 
     def clear_files(self):
@@ -723,7 +705,7 @@ class MainWindow(QMainWindow):
             for i in range(count):
                 item = self.file_list.item(i)
                 file_path = Path(item.data(Qt.ItemDataRole.UserRole))
-                ext = file_path.suffix.lower().lstrip('.')
+                ext = format_of(file_path)
                 if ext == input_format or input_format == 'Все':
                     valid_count += 1
             text = f"{files_word(count)} в очереди"
@@ -759,7 +741,7 @@ class MainWindow(QMainWindow):
                 for i in range(self.file_list.count() - 1, -1, -1):
                     item = self.file_list.item(i)
                     file_path = Path(item.data(Qt.ItemDataRole.UserRole))
-                    ext = file_path.suffix.lower().lstrip('.')
+                    ext = format_of(file_path)
                     if ext != input_format:
                         self.file_list.takeItem(i)
                 self.update_convert_button()
@@ -825,7 +807,7 @@ class MainWindow(QMainWindow):
             item = self.file_list.item(i)
             input_path = Path(item.data(Qt.ItemDataRole.UserRole))
 
-            ext = input_path.suffix.lower().lstrip('.')
+            ext = format_of(input_path)
             if ext != input_format:
                 continue
 
@@ -886,6 +868,10 @@ class MainWindow(QMainWindow):
                 f"Нет файлов формата {input_format} для конвертации"
             )
             return
+
+        # LibreOffice не скачался при запуске (не было интернета) — пробуем снова, иначе до перезапуска
+        # программы Word → PDF так и отвечал бы «скачивается, попробуйте позже»
+        self.maybe_start_libreoffice_install()
 
         # Кнопка становится «Остановить», запускаем таймер
         self.conversion_in_progress = True
@@ -958,12 +944,7 @@ class MainWindow(QMainWindow):
                 output_dir = self.settings.get('output_directory')
                 if output_dir:
                     try:
-                        if sys.platform == 'win32':
-                            os.startfile(output_dir)
-                        elif sys.platform == 'darwin':
-                            subprocess.Popen(['open', output_dir])
-                        else:
-                            subprocess.Popen(['xdg-open', output_dir])
+                        open_folder(output_dir)
                     except Exception as e:
                         logger.error(f"Не удалось открыть папку: {e}")
 
@@ -1024,7 +1005,7 @@ class MainWindow(QMainWindow):
         # Служебные файлы пропускаем: «~$отчёт.docx» — замок открытого в Word документа,
         # «._фото.jpg» — «тени», которые macOS оставляет на флешках, прочие скрытые «.файлы»
         return sorted(f for f in folder.iterdir()
-                      if f.is_file() and f.suffix.lower().lstrip('.') in formats and not f.name.startswith(('~$', '.')))
+                      if f.is_file() and format_of(f) in formats and not f.name.startswith(('~$', '.')))
 
     def closeEvent(self, event):
         """Обработчик закрытия окна"""

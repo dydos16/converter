@@ -163,6 +163,32 @@ def folder_writable(folder: Path) -> bool:
         return False
 
 
+def child_env() -> dict:
+    """
+    Окружение для чужих программ (LibreOffice, файловый менеджер). Собранное приложение подставляет себе
+    свои библиотеки (LD_LIBRARY_PATH) и плагины Qt (QT_PLUGIN_PATH) — чужой программе они не подходят:
+    Dolphin падает на «нашем» Qt, системный gio — на встроенной glib. Отдаём окружение как до запуска.
+    """
+    env = dict(os.environ)
+    if getattr(sys, "frozen", False):
+        env.pop("QT_PLUGIN_PATH", None)
+        env.pop("QML2_IMPORT_PATH", None)
+        original = env.pop("LD_LIBRARY_PATH_ORIG", None)    # PyInstaller сохраняет сюда исходное значение
+        if original is None:
+            env.pop("LD_LIBRARY_PATH", None)
+        else:
+            env["LD_LIBRARY_PATH"] = original
+    return env
+
+
+def open_folder(folder) -> None:
+    """Показывает папку в Проводнике / Finder / файловом менеджере Linux."""
+    if sys.platform == "win32":
+        os.startfile(folder)
+    else:
+        subprocess.Popen(["open" if sys.platform == "darwin" else "xdg-open", str(folder)], env=child_env())
+
+
 def read_text_any(path: Path) -> str:
     """Текст файла в UTF-8 (с BOM или без) или в Windows-1251 — так сохраняют русский Excel и старый Блокнот."""
     data = Path(path).read_bytes()

@@ -13,10 +13,15 @@ from loguru import logger
 
 
 EXCEL_MAX_ROWS = 1_048_576          # больше строк в лист Excel не помещается
+# Символы, которые нельзя хранить в ячейке (то же, что openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE;
+# сам openpyxl здесь не импортируем — модуль грузится при запуске окна)
+ILLEGAL_CHARACTERS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
 def _cell(value: str):
     """Числа из CSV — числами, иначе Excel покажет их текстом. Коды с ведущим нулём и длинные номера не трогаем."""
+    # Управляющие символы (цвета терминала в логах, мусор выгрузок) Excel хранить не умеет — вся таблица падала
+    value = ILLEGAL_CHARACTERS_RE.sub("", value)
     if re.fullmatch(r"-?(0|[1-9]\d{0,14})", value):
         return int(value)
     if re.fullmatch(r"-?(0|[1-9]\d{0,14})[.,]\d+", value):

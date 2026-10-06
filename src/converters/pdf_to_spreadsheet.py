@@ -126,8 +126,9 @@ class PdfToSpreadsheetConverter(BaseConverter):
             import openpyxl
             wb = openpyxl.Workbook()
             ws = wb.active
-            for row in rows:
-                ws.append(row)
+            from .spreadsheet_converter import ILLEGAL_CHARACTERS_RE
+            for row in rows:        # управляющие символы из «битых» шрифтов PDF Excel хранить не умеет
+                ws.append([ILLEGAL_CHARACTERS_RE.sub("", c) if isinstance(c, str) else c for c in row])
             wb.save(str(output_path))
             return True
 

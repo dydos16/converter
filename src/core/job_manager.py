@@ -279,6 +279,7 @@ class JobManager:
 
     def _process_job(self, job: ConversionJob):
         """Обрабатывает отдельную задачу"""
+        existed = job.output_path.exists()      # имя выбрано свободным — всё, что появится там, пишем мы
         try:
             # Уведомляем о начале
             self._trigger_callback('on_job_started', job)
@@ -345,6 +346,12 @@ class JobManager:
             logger.exception(f"Ошибка при выполнении задачи {job.id}: {e}")
 
         finally:
+            # Сбой посреди записи (кончилось место на флешке) оставил бы обрезанный файл с «готовым» именем
+            if job.get_status() == JobStatus.FAILED and not existed:
+                try:
+                    job.output_path.unlink(missing_ok=True)
+                except OSError as e:
+                    logger.warning(f"Не удалось убрать недописанный {job.output_path}: {e}")
             with self.lock:
                 if job.id in self.active_jobs:
                     del self.active_jobs[job.id]

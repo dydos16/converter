@@ -55,6 +55,8 @@ def main() -> int:
     from src.converters.factory import ConverterFactory
 
     w = MainWindow()
+    finished = []                                  # итоги установки LibreOffice
+    w.libreoffice_manager.install_finished.connect(lambda ok, msg: finished.append((ok, msg)))
     w.settings.settings['auto_open_folder'] = False
     w.settings.settings['show_notifications'] = True
     app.setPalette(get_palette_for("light"))
@@ -103,6 +105,8 @@ def main() -> int:
         w.add_paths(src[:2])                            # те же файлы перетащили ещё раз — дублей быть не должно
         w.output_format_combo.setCurrentText("jpg")
         w.start_conversion()
+        w.input_format_combo.setCurrentText("Все")     # формат переключили посреди конвертации
+        check("Кнопка «Остановить» доступна всю конвертацию", w.convert_btn.isEnabled())
         done = wait(app, 60, lambda: all(w.file_list.item(i).data(PROGRESS_ROLE) in (100, -1)
                                          for i in range(w.file_list.count())))
         made = sorted(p.name for p in out.iterdir())
@@ -110,6 +114,16 @@ def main() -> int:
               done and made == ["img_0 (1).jpg", "img_0.jpg", "img_1.jpg", "img_2.jpg"], str(made))
         widths = {Image.open(out / name).width for name in made}
         check("«Макс. ширина» из настроек применяется", widths == {32}, str(widths))
+
+        # «фото.jpeg» с iPhone и «фото.jpg» — один формат: оба годятся, «Из» — jpg
+        wait(app, 5, lambda: not w.conversion_in_progress)
+        w.clear_files()
+        w.input_format_combo.setCurrentText("Все")
+        for name in ("фото.jpeg", "снимок.JPG"):
+            Image.new("RGB", (8, 8)).save(tmp / name, "JPEG")
+        w.add_paths([tmp / "фото.jpeg", tmp / "снимок.JPG"])
+        check(".jpeg и .jpg конвертируются вместе", w.input_format_combo.currentText() == "jpg"
+              and w.convert_btn.isEnabled(), w.input_format_combo.currentText())
 
         if shots:
             wait(app, 1.0)
@@ -130,10 +144,14 @@ def main() -> int:
         if lo.is_available():
             check("LibreOffice уже установлен — автоустановку пропускаем", True, str(lo.get_soffice_path()))
         else:
-            finished = []
-            lo.install_finished.connect(lambda ok, msg: finished.append((ok, msg)))
+            # Программа запускает скачивание при старте; если оно не удалось (не было интернета),
+            # следующая конвертация пробует снова. Здесь при старте не качали — должен начать шаг 3
+            started = wait(app, 3, lambda: lo._install_thread is not None)
+            check("Конвертация начинает скачивать LibreOffice, если его нет", started)
             t = time.time()
-            lo._do_install_blocking()
+            if not started:
+                lo._do_install_blocking()
+            wait(app, 900, lambda: finished)
             wait(app, .5)
             ok = bool(finished and finished[-1][0])
             check("Автоустановка LibreOffice", ok, f"{time.time() - t:.0f} с, {finished[-1][1] if finished else 'нет ответа'}")

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Callable, Optional
 from loguru import logger
 from PySide6.QtCore import QLockFile, QObject, QTimer, QThread, Signal
+from src.utils.helpers import child_env
 
 
 # Пакеты, которых обычно нет только на серверах и в минимальных контейнерах
@@ -304,7 +305,8 @@ class LibreOfficeManager(QObject):
                         [str(self._soffice_path), "--version"],
                         capture_output=True,
                         text=True,
-                        timeout=10
+                        timeout=10,
+                        env=child_env(),
                     )
                     if result.returncode == 0:
                         version_info = result.stdout.strip()
@@ -628,23 +630,36 @@ class LibreOfficeManager(QObject):
             # LibreOffice пишет «<имя исходного>.<формат>» в outdir. В папке пользователя это затирало его файл
             # с таким именем (а результат потом переименовывался — и прежний файл пропадал), а одновременные
             # задачи с одинаковыми именами — друг друга. Поэтому outdir — своя временная папка
-            with tempfile.TemporaryDirectory(prefix="fcp_lo_") as workdir:
+            with tempfile.TemporaryDirectory(prefix="fcp_lo_", ignore_cleanup_errors=True) as workdir:
                 cmd = self._get_optimized_cmd(input_path, output_path, infilter, Path(workdir))
                 logger.info(f"Запуск оптимизированной конвертации: {' '.join(cmd)}")
+                fmt = output_path.suffix.lstrip('.').lower()
+                spare = Path(workdir) / "profile"
 
-                for _ in range(2):
+                for _ in range(4):
                     result = subprocess.run(
                         cmd,
                         capture_output=True,
                         text=True,
                         timeout=300,
                         stdin=subprocess.DEVNULL,
+                        env=child_env(),
                     )
                     # 81 — LibreOffice доделал первый запуск на новом профиле и просит перезапуск, ничего
-                    # не сконвертировав. Повторяем один раз
-                    if result.returncode != 81:
-                        break
-                    logger.warning("LibreOffice попросил перезапуск (код 81, новый профиль) — повторяем")
+                    # не сконвертировав. Повторяем
+                    if result.returncode == 81:
+                        logger.warning("LibreOffice попросил перезапуск (код 81, новый профиль) — повторяем")
+                        continue
+                    # Профиль занят другим LibreOffice (вторая копия программы; soffice.bin, оставшийся после
+                    # тайм-аута или закрытия программы): soffice молча отдаёт задачу ему и выходит с кодом 0,
+                    # а тот её теряет. Признак — ни строчки вывода и нет файла. Повторяем на своём профиле
+                    if (result.returncode == 0 and not result.stdout.strip() and not spare.exists()
+                            and next(Path(workdir).glob(f"*.{fmt}"), None) is None):
+                        logger.warning("Профиль LibreOffice занят другим процессом — повторяем на временном профиле")
+                        spare.mkdir()
+                        cmd[1] = f"-env:UserInstallation={spare.as_uri()}"
+                        continue
+                    break
 
                 if result.returncode != 0:
                     logger.error(f"LibreOffice ошибка (код {result.returncode}): {result.stderr}")
@@ -653,7 +668,6 @@ class LibreOfficeManager(QObject):
 
                 # Во временной папке результат — единственный файл. Имя не угадываем: необычные символы
                 # или другую форму Юникода (на Mac так бывает) LibreOffice мог записать по-своему
-                fmt = output_path.suffix.lstrip('.').lower()
                 made = next(Path(workdir).glob(f"*.{fmt}"), None)
                 if made is None:
                     logger.error(f"LibreOffice не создал .{fmt}: {(result.stdout + result.stderr).strip()[-400:]}")

@@ -348,6 +348,17 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
             return why(err)
         return None if out.read_bytes().startswith(b"\xef\xbb\xbf") else "CSV без BOM — русский Excel покажет кракозябры"
 
+    def csv_control_chars():
+        src = d / "выгрузка.csv"                        # мусорные управляющие символы, цвета терминала
+        src.write_text("имя;значение\nтест\x01;1\n\x1b[31mкрасный;2\n", encoding="utf-8")
+        ok, err = run(src, d / "выгрузка.xlsx")
+        if not ok:
+            return why(err)
+        from openpyxl import load_workbook
+        ws = load_workbook(d / "выгрузка.xlsx").active
+        return None if ws["A2"].value == "тест" and ws["B3"].value == 2 else \
+            f"A2={ws['A2'].value!r} B3={ws['B3'].value!r}"
+
     def scan_pdf() -> Path:
         """Скан как со сканера: страница картинкой 200 DPI, текстового слоя нет."""
         import fitz
@@ -730,6 +741,7 @@ def edge_cases(files: dict[str, Path], d: Path, soffice: Path, profile: Path) ->
         ("TXT из Блокнота (1251) → DOCX", windows_txt("docx")),
         ("TXT из Блокнота (1251) → PDF", windows_txt("pdf")),
         ("XLSX → CSV открывается в русском Excel (BOM)", csv_for_excel),
+        ("CSV с управляющими символами → XLSX", csv_control_chars),
         ("Скан PDF → TXT: текст распознан (OCR), таблица тоже", scan_to_text),
         ("Скан PDF → DOCX: текст распознан (OCR)", scan_to_docx),
         ("PDF → PPTX: текст редактируемый, таблица по ячейкам", pdf_to_pptx_editable),

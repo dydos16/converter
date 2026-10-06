@@ -149,9 +149,10 @@ def test_dropped_folder_skips_service_files():
     import tempfile
     from src.gui.main_window import MainWindow
     folder = Path(tempfile.mkdtemp())
-    for name in ("фото.jpg", "~$отчёт.docx", "._фото.jpg", ".скрытый.png", "СКАН.PNG", "заметки.md"):
+    for name in ("фото.jpg", "~$отчёт.docx", "._фото.jpg", ".скрытый.png", "СКАН.PNG", "заметки.md", "скан.tif"):
         (folder / name).write_bytes(b"x")
-    assert [p.name for p in MainWindow._files_in(folder)] == sorted(["фото.jpg", "СКАН.PNG"])
+    # .tif — то же, что .tiff: так сохраняют сканеры
+    assert [p.name for p in MainWindow._files_in(folder)] == sorted(["фото.jpg", "СКАН.PNG", "скан.tif"])
 
 
 def test_read_only_folder_is_detected():
@@ -194,7 +195,74 @@ def test_second_app_copy_does_not_wipe_libreoffice_install():
         first.unlock()
 
 
+def test_external_programs_get_system_environment():
+    """Собранное приложение подставляет себе свои библиотеки и плагины Qt. Файловый менеджер (Dolphin —
+    тоже на Qt) и LibreOffice с ними падают: им — окружение, как до запуска приложения."""
+    from unittest import mock
+    from src.utils import helpers
+    env = {"LD_LIBRARY_PATH": "/app/_internal", "LD_LIBRARY_PATH_ORIG": "/opt/lib", "HOME": "/home/u",
+           "QT_PLUGIN_PATH": "/app/_internal/PySide6/Qt/plugins", "QML2_IMPORT_PATH": "/app/_internal/qml"}
+    with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(sys, "frozen", True, create=True):
+        assert helpers.child_env() == {"LD_LIBRARY_PATH": "/opt/lib", "HOME": "/home/u"}
+        del os.environ["LD_LIBRARY_PATH_ORIG"]                  # до запуска переменной не было
+        assert helpers.child_env() == {"HOME": "/home/u"}
+        with mock.patch("subprocess.Popen") as popen, mock.patch.object(sys, "platform", "linux"):
+            helpers.open_folder("/home/u/Загрузки")
+        assert popen.call_args.args[0] == ["xdg-open", "/home/u/Загрузки"]
+        assert popen.call_args.kwargs["env"] == {"HOME": "/home/u"}
+
+
+def test_failed_conversion_leaves_no_partial_file():
+    """Место на флешке кончилось посреди записи: обрезанный файл с «готовым» именем не оставляем."""
+    import tempfile
+    from unittest import mock
+    from src.core.job_manager import JobManager, JobStatus
+    d = Path(tempfile.mkdtemp())
+    (d / "отчёт.png").write_bytes(b"x")
+
+    class Broken:
+        def convert(self, src, out):
+            out.write_bytes(b"\x89PNG\r\n")              # начало файла — и всё
+            raise OSError(28, "No space left on device")
+
+    jm = JobManager()
+    job = jm.get_job(jm.add_job(d / "отчёт.png", d / "отчёт.jpg", "png", "jpg"))
+    with mock.patch("src.core.job_manager.ConverterFactory.get_converter", return_value=Broken()):
+        jm._process_job(job)
+    assert job.get_status() == JobStatus.FAILED
+    assert not (d / "отчёт.jpg").exists()
+
+
+def test_busy_libreoffice_profile_falls_back_to_own_profile():
+    """Профиль LibreOffice занят другим soffice (вторая копия программы, оставшийся после закрытия или тайм-аута):
+    soffice молча отдаёт задачу ему и выходит с кодом 0 — а файл так и не появляется. Повторяем на своём профиле."""
+    import subprocess
+    import tempfile
+    from unittest import mock
+    from src.core.libreoffice_manager import LibreOfficeManager
+    lo = LibreOfficeManager()
+    d = Path(tempfile.mkdtemp())
+    (d / "отчёт.docx").write_bytes(b"x")
+    profiles = []
+
+    def soffice(cmd, **kwargs):
+        profiles.append(cmd[1])
+        if len(profiles) == 1:                          # занятый профиль: ни вывода, ни файла
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        (Path(cmd[cmd.index("--outdir") + 1]) / "отчёт.pdf").write_bytes(b"%PDF-")
+        return subprocess.CompletedProcess(cmd, 0, "convert ... using filter : writer_pdf_Export\n", "")
+
+    with mock.patch.object(lo, "_check_attempted", True), mock.patch.object(lo, "_is_available", True), \
+         mock.patch.object(lo, "_soffice_path", Path(sys.executable)), mock.patch("subprocess.run", soffice):
+        assert lo.convert(d / "отчёт.docx", d / "отчёт.pdf")
+    assert (d / "отчёт.pdf").read_bytes() == b"%PDF-"
+    assert len(profiles) == 2 and profiles[0] != profiles[1]
+
+
 if __name__ == "__main__":
+    test_busy_libreoffice_profile_falls_back_to_own_profile()
+    test_failed_conversion_leaves_no_partial_file()
+    test_external_programs_get_system_environment()
     test_second_app_copy_does_not_wipe_libreoffice_install()
     test_read_only_folder_is_detected()
     test_dropped_folder_skips_service_files()

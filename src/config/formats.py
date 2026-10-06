@@ -1,6 +1,7 @@
 """
 Конфигурация поддерживаемых форматов - единый источник правды
 """
+from pathlib import Path
 
 # Поддерживаемые конвертации
 SUPPORTED_CONVERSIONS = {
@@ -120,8 +121,20 @@ SUPPORTED_CONVERSIONS = {
     ('heif', 'webp'): 'HeicConverter',
 }
 
-# Все поддерживаемые входные форматы
-ALL_INPUT_FORMATS = sorted(set(in_fmt for in_fmt, _ in SUPPORTED_CONVERSIONS.keys()))
+# Один формат под разными расширениями: «фото.jpeg» — тот же JPEG, «скан.tif» — тот же TIFF
+EXTENSION_ALIASES = {'jpeg': 'jpg', 'tif': 'tiff', 'heif': 'heic'}
+
+
+def format_of(path) -> str:
+    """Формат файла по расширению: «Фото.JPEG» → jpg."""
+    ext = Path(path).suffix.lower().lstrip('.')
+    return EXTENSION_ALIASES.get(ext, ext)
+
+
+# Все поддерживаемые входные форматы (без синонимов — в списке «Из» один jpg на .jpg и .jpeg)
+ALL_INPUT_FORMATS = sorted(set(in_fmt for in_fmt, _ in SUPPORTED_CONVERSIONS.keys()) - set(EXTENSION_ALIASES))
+# Расширения, которые принимаем при добавлении файлов
+INPUT_EXTENSIONS = sorted(set(ALL_INPUT_FORMATS) | set(EXTENSION_ALIASES))
 
 # Все поддерживаемые выходные форматы
 ALL_OUTPUT_FORMATS = sorted(set(out_fmt for _, out_fmt in SUPPORTED_CONVERSIONS.keys()))
