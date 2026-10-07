@@ -863,6 +863,20 @@ class TabBar(QWidget):
         b = self._bar()
         return QRectF(b.left() + self.INSET + i * self.ITEM_W, b.top() + self.INSET, self.ITEM_W, self.ITEM_H)
 
+    def _lens(self, grow: float) -> QRectF:
+        """Линза. Пружина перелетает цель на ~30 %, и у крайней вкладки линза вылетала за круглый торец
+        панели, где её срезал прямоугольный край виджета. Теперь она сплющивается о торец (до круга)."""
+        r = self._item(self._pos.value).adjusted(-grow, -grow, grow, grow)
+        b = self._bar()
+        lo, hi = b.left() + self.INSET - grow, b.right() - self.INSET + grow
+        left, right = max(r.left(), lo), min(r.right(), hi)
+        if right - left < r.height():
+            if left == lo:
+                right = lo + r.height()
+            else:
+                left = hi - r.height()
+        return QRectF(left, r.top(), right - left, r.height())
+
     def _index_at(self, x: float) -> float:
         i = (x - self._bar().left() - self.INSET) / self.ITEM_W - .5
         return max(0.0, min(len(self._items) - 1.0, i))
@@ -944,7 +958,7 @@ class TabBar(QWidget):
                                        shadow=QColor(0, 0, 0, 0))
         lift = max(0.0, self._lift.value)
         grow = self.LIFTED * lift
-        lens = self._item(self._pos.value).adjusted(-grow, -grow, grow, grow)
+        lens = self._lens(grow)
         lens_shape = rounded(lens, lens.height() / 2)
 
         # Подложка выбранной вкладки в покое: чёрный 7,5% / белый 10%; когда линзу тащат — исчезает

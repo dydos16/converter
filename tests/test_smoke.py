@@ -376,7 +376,27 @@ def test_russian_csv_without_header():
     assert rows == [("яблоко", 99.5, 1.25), ("груша", 120, 0.75)], rows
 
 
+def test_tab_lens_stays_inside_the_bar():
+    """Пружина перелетает вкладку на ~30 %: у крайней линза вылетала за круглый торец панели,
+    и её срезал прямоугольный край виджета. Теперь она сплющивается о торец, не уже круга."""
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from src.gui.glass import TabBar
+    tb = TabBar([("Конвертер", "arrows"), ("Настройки", "gear"), ("Журнал", "list")])
+    bar = tb._bar()
+    for pos in (-0.9, -0.6, -0.2, 0, 0.3, 1, 1.7, 2, 2.2, 2.6, 2.9):
+        for grow in (0, tb.LIFTED):
+            tb._pos.value = pos
+            lens = tb._lens(grow)
+            assert bar.left() + tb.INSET - grow - 1e-6 <= lens.left(), (pos, grow, lens)
+            assert lens.right() <= bar.right() - tb.INSET + grow + 1e-6, (pos, grow, lens)
+            assert lens.width() >= lens.height() - 1e-6, (pos, grow, lens)
+    tb._pos.value = 1                                          # в покое — ровно вкладка
+    assert tb._lens(0) == tb._item(1)
+
+
 if __name__ == "__main__":
+    test_tab_lens_stays_inside_the_bar()
     test_russian_csv_without_header()
     test_utf16_text_and_csv_are_read()
     test_pdf_text_is_escaped_in_html()
